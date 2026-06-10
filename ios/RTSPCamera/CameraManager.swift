@@ -2,7 +2,7 @@ import Foundation
 import AVFoundation
 import UIKit
 
-class CameraManager: NSObject, ObservableObject {
+class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     @Published var isRunning = false
     @Published var activeCameraPosition: AVCaptureDevice.Position = .back
     @Published var zoomFactor: CGFloat = 1.0

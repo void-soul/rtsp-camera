@@ -1,5 +1,8 @@
 import Foundation
 
+private let IFF_UP = Int32(0x1)
+private let IFF_LOOPBACK = Int32(0x8)
+
 enum Utils {
     static func getIPAddress() -> String {
         var address: String = "127.0.0.1"

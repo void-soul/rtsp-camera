@@ -7,8 +7,8 @@ class AudioEncoder {
     private var pcmBuffer = Data()
     private var callback: ((Data, Int64) -> Void)?
     
-    private var srcFormat: AudioStreamBasicDescription?
-    private var dstFormat: AudioStreamBasicDescription?
+    private var srcFormat = AudioStreamBasicDescription()
+    private var dstFormat = AudioStreamBasicDescription()
     
     private let outBufferMaxSizeBytes: UInt32 = 1024 * 8
     private var outBuffer: UnsafeMutablePointer<UInt8>
@@ -46,7 +46,7 @@ class AudioEncoder {
         dstFormat = AudioStreamBasicDescription(
             mSampleRate: sampleRate,
             mFormatID: kAudioFormatMPEG4AAC,
-            mFormatFlags: UInt32(MPEG4ObjectType.AAC_LC.rawValue),
+            mFormatFlags: UInt32(kMPEG4Object_AAC_LC),
             mBytesPerPacket: 0,
             mFramesPerPacket: 1024,
             mBytesPerFrame: 0,
@@ -55,7 +55,7 @@ class AudioEncoder {
             mReserved: 0
         )
         
-        var status = AudioConverterNew(&srcFormat!, &dstFormat!, &audioConverter)
+        var status = AudioConverterNew(&srcFormat, &dstFormat, &audioConverter)
         guard status == noErr, let converter = audioConverter else {
             print("AudioConverterNew failed: \(status)")
             return
@@ -98,7 +98,7 @@ class AudioEncoder {
             }
         }
         
-        let bytesPerFrame = srcFormat?.mBytesPerFrame ?? 2
+        let bytesPerFrame = srcFormat.mBytesPerFrame
         let bytesNeeded = 1024 * Int(bytesPerFrame)
         
         while pcmBuffer.count >= bytesNeeded {
@@ -117,7 +117,7 @@ class AudioEncoder {
                 var ioOutputDataPacketSize: UInt32 = 1
                 var outAudioBufferList = AudioBufferList()
                 outAudioBufferList.mNumberBuffers = 1
-                outAudioBufferList.mBuffers.mNumberChannels = dstFormat?.mChannelsPerFrame ?? 1
+                outAudioBufferList.mBuffers.mNumberChannels = dstFormat.mChannelsPerFrame
                 outAudioBufferList.mBuffers.mDataByteSize = outBufferMaxSizeBytes
                 outAudioBufferList.mBuffers.mData = UnsafeMutableRawPointer(outBuffer)
                 
