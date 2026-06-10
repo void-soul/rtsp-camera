@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 private let IFF_UP = Int32(0x1)
 private let IFF_LOOPBACK = Int32(0x8)

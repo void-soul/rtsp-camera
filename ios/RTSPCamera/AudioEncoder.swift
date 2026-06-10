@@ -46,7 +46,7 @@ class AudioEncoder {
         dstFormat = AudioStreamBasicDescription(
             mSampleRate: sampleRate,
             mFormatID: kAudioFormatMPEG4AAC,
-            mFormatFlags: UInt32(kMPEG4Object_AAC_LC),
+            mFormatFlags: UInt32(MPEG4ObjectID.aac_LC.rawValue),
             mBytesPerPacket: 0,
             mFramesPerPacket: 1024,
             mBytesPerFrame: 0,
