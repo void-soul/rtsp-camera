@@ -1,12 +1,13 @@
 import Foundation
 import UIKit
 import Darwin
+import QuartzCore
 
 private let IFF_UP = Int32(0x1)
 private let IFF_LOOPBACK = Int32(0x8)
 
 // Replicate the BSD if_data layout for statistics since net/if.h is not bridged by default in Swift
-private struct if_data {
+private struct LocalIfData {
     var ifi_type: UInt8 = 0
     var ifi_typelen: UInt8 = 0
     var ifi_physical: UInt8 = 0
@@ -74,7 +75,7 @@ class PerformanceMonitor {
             if (flags & IFF_UP) != 0 && (flags & IFF_LOOPBACK) == 0 {
                 let name = String(cString: addr.pointee.ifa_name)
                 if name.hasPrefix("en") || name.hasPrefix("bridge") || name.hasPrefix("pdp_ip") {
-                    if let data = addr.pointee.ifa_data?.assumingMemoryBound(to: if_data.self) {
+                    if let data = addr.pointee.ifa_data?.assumingMemoryBound(to: LocalIfData.self) {
                         txTotal += UInt64(data.pointee.ifi_obytes)
                         rxTotal += UInt64(data.pointee.ifi_ibytes)
                     }
@@ -92,7 +93,7 @@ class PerformanceMonitor {
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
         let result = withUnsafeMutablePointer(to: &info) {
             $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+                task_info(mach_task_self(), task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
             }
         }
         guard result == KERN_SUCCESS else { return "MEM: N/A" }
@@ -132,17 +133,17 @@ class PerformanceMonitor {
     private func getProcessCpuTimeNs() -> UInt64 {
         var threadList: thread_act_array_t?
         var threadCount: mach_msg_type_number_t = 0
-        let result = task_threads(mach_task_self_, &threadList, &threadCount)
+        let result = task_threads(mach_task_self(), &threadList, &threadCount)
         guard result == KERN_SUCCESS, let threads = threadList else { return 0 }
         defer {
             let size = vm_size_t(threadCount) * vm_size_t(MemoryLayout<thread_t>.size)
-            vm_deallocate(mach_task_self_, vm_address_t(bitPattern: threads), size)
+            vm_deallocate(mach_task_self(), vm_address_t(bitPattern: threads), size)
         }
 
         var totalTimeNs: UInt64 = 0
         for i in 0..<Int(threadCount) {
             var info = thread_basic_info()
-            var count = mach_msg_type_number_t(THREAD_INFO_MAX)
+            var count = mach_msg_type_number_t(MemoryLayout<thread_basic_info>.size / MemoryLayout<integer_t>.size)
             let kr = withUnsafeMutablePointer(to: &info) {
                 $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
                     thread_info(threads[i], thread_flavor_t(THREAD_BASIC_INFO), $0, &count)
