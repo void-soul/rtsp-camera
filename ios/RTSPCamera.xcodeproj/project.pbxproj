@@ -17,6 +17,8 @@
 		2B11112028E95F6C000B26E1 /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B11111F28E95F6C000B26E1 /* SettingsManager.swift */; };
 		2B11112228E95F6C000B26E1 /* Utils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B11112128E95F6C000B26E1 /* Utils.swift */; };
 		2B11112428E95F6C000B26E1 /* StreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B11112328E95F6C000B26E1 /* StreamManager.swift */; };
+		2B11112728E95F6C000B26E1 /* PerformanceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B11112628E95F6C000B26E1 /* PerformanceMonitor.swift */; };
+		2B11112928E95F6C000B26E1 /* FrameProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B11112828E95F6C000B26E1 /* FrameProvider.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +34,8 @@
 		2B11112128E95F6C000B26E1 /* Utils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Utils.swift; sourceTree = "<group>"; };
 		2B11112328E95F6C000B26E1 /* StreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamManager.swift; sourceTree = "<group>"; };
 		2B11112528E95F6C000B26E1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		2B11112628E95F6C000B26E1 /* PerformanceMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceMonitor.swift; sourceTree = "<group>"; };
+		2B11112828E95F6C000B26E1 /* FrameProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProvider.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -75,6 +79,8 @@
 				2B11111F28E95F6C000B26E1 /* SettingsManager.swift */,
 				2B11112128E95F6C000B26E1 /* Utils.swift */,
 				2B11112328E95F6C000B26E1 /* StreamManager.swift */,
+				2B11112628E95F6C000B26E1 /* PerformanceMonitor.swift */,
+				2B11112828E95F6C000B26E1 /* FrameProvider.swift */,
 				2B11112528E95F6C000B26E1 /* Info.plist */,
 			);
 			sourceTree = "<group>";
@@ -158,6 +164,8 @@
 				2B11112028E95F6C000B26E1 /* SettingsManager.swift in Sources */,
 				2B11112228E95F6C000B26E1 /* Utils.swift in Sources */,
 				2B11112428E95F6C000B26E1 /* StreamManager.swift in Sources */,
+				2B11112728E95F6C000B26E1 /* PerformanceMonitor.swift in Sources */,
+				2B11112928E95F6C000B26E1 /* FrameProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
