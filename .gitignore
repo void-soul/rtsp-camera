@@ -1,0 +1,14 @@
+.idea/
+android/app/debug
+android/app/profile
+android/app/release
+android/.kotlin
+android/app/build
+/.metadata
+/analysis_options.yaml
+/android/*.log
+/android/build_log.txt
+/pubspec.yaml
+/pubspec.lock
+/rtsp_camera.iml
+/android/build/reports/problems

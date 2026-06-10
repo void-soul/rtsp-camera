@@ -1,0 +1,51 @@
+<resources>
+    <string name="app_name">RTSP CAMERA</string>
+    <string name="preview_disabled_hint">推流运行中</string>
+    <string name="settings">设置</string>
+    
+    <string name="param_zoom">变焦</string>
+    <string name="param_ev">曝光</string>
+    <string name="param_focus">对焦</string>
+    <string name="param_wb">白平衡</string>
+    <string name="param_filter">滤镜</string>
+    
+    <string name="filter_none">原图</string>
+    <string name="filter_bw">黑白</string>
+    <string name="filter_vivid">鲜艳</string>
+    <string name="filter_warm">暖色</string>
+    <string name="filter_cool">冷色</string>
+    <string name="focus_not_supported">该摄像头不支持手动对焦</string>
+    <string name="pref_gop_title">关键帧间隔</string>
+    <string name="camera_label">摄像头</string>
+    <string name="camera_front">前置</string>
+    <string name="camera_back">后置</string>
+    
+    <string name="wb_auto">自动</string>
+    <string name="wb_incandescent">白炽灯</string>
+    <string name="wb_fluorescent">荧光灯</string>
+    <string name="wb_day">日光</string>
+    <string name="wb_cloudy">多云</string>
+
+    <!-- Preferences Strings -->
+    <string name="pref_core_title">核心推流设置</string>
+    <string name="pref_res_title">分辨率</string>
+    <string name="pref_res_sum">仅显示设备硬件支持的分辨率，无缩放损耗</string>
+    <string name="pref_fps_title">帧率 (FPS)</string>
+    <string name="pref_bitrate_title">码率 (Mbps)</string>
+    <string name="pref_func_title">功能开关</string>
+    <string name="pref_audio_title">开启音频</string>
+    <string name="pref_audio_sum">是否同步推送麦克风声音</string>
+    <string name="pref_preview_title">开启预览渲染</string>
+    <string name="pref_preview_sum">关闭可大幅降低发热</string>
+    <string name="pref_net_title">网络设置</string>
+    <string name="pref_port_title">RTSP 端口</string>
+    <string name="pref_path_title">RTSP 路径</string>
+    <string name="pref_transport_title">传输模式</string>
+    <string name="pref_transport_sum">UDP 或 TCP 交织传输</string>
+    <string name="pref_hw_title">硬件特性 (增强)</string>
+    <string name="pref_ois_title">光学防抖 (OIS)</string>
+    <string name="pref_eis_title">电子防抖 (EIS)</string>
+    <string name="pref_sys_title">系统设置</string>
+    <string name="pref_lang_title">界面语言 (Language)</string>
+    <string name="encoder_failed">编码器初始化失败，请尝试降低分辨率或码率</string>
+</resources>

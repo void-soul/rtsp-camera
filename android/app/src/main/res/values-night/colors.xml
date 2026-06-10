@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Legacy names still referenced in activity_main.xml -->
+    <color name="mi_pro_yellow">#FFD700</color>
+    <color name="mi_pro_bg_semi">#AA000000</color>
+
+    <!-- Dark mode uses the same colors since the app is inherently dark -->
+    <color name="app_bg">#000000</color>
+    <color name="toolbar_bg">#44000000</color>
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#99FFFFFF</color>
+    <color name="text_dim">#88FFFFFF</color>
+    <color name="text_accent">#FFD700</color>
+    <color name="text_error">#FF4444</color>
+    <color name="divider">#33FFFFFF</color>
+    <color name="bottom_bar_bg">#AA000000</color>
+    <color name="overlay_bg">#222222</color>
+</resources>

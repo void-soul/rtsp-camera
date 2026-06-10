@@ -1,0 +1,51 @@
+<resources>
+    <string name="app_name">RTSP CAMERA</string>
+    <string name="preview_disabled_hint">STREAMING ACTIVE</string>
+    <string name="settings">Settings</string>
+    
+    <string name="param_zoom">ZOOM</string>
+    <string name="param_ev">EV</string>
+    <string name="param_focus">FOCUS</string>
+    <string name="param_wb">WB</string>
+    <string name="param_filter">FILTER</string>
+    
+    <string name="filter_none">None</string>
+    <string name="filter_bw">B&amp;W</string>
+    <string name="filter_vivid">Vivid</string>
+    <string name="filter_warm">Warm</string>
+    <string name="filter_cool">Cool</string>
+    <string name="focus_not_supported">This camera does not support manual focus</string>
+    <string name="pref_gop_title">Keyframe Interval</string>
+    <string name="camera_label">Camera</string>
+    <string name="camera_front">Front</string>
+    <string name="camera_back">Back</string>
+    
+    <string name="wb_auto">AUTO</string>
+    <string name="wb_incandescent">INCANDESCENT</string>
+    <string name="wb_fluorescent">FLUORESCENT</string>
+    <string name="wb_day">DAY</string>
+    <string name="wb_cloudy">CLOUDY</string>
+
+    <!-- Preferences Strings -->
+    <string name="pref_core_title">Core Streaming</string>
+    <string name="pref_res_title">Resolution</string>
+    <string name="pref_res_sum">Hardware-supported resolutions only, no scaling</string>
+    <string name="pref_fps_title">Frame Rate (FPS)</string>
+    <string name="pref_bitrate_title">Bitrate (Mbps)</string>
+    <string name="pref_func_title">Functions</string>
+    <string name="pref_audio_title">Enable Audio</string>
+    <string name="pref_audio_sum">Stream microphone sound</string>
+    <string name="pref_preview_title">Enable Preview Rendering</string>
+    <string name="pref_preview_sum">Disable to reduce heat</string>
+    <string name="pref_net_title">Network</string>
+    <string name="pref_port_title">RTSP Port</string>
+    <string name="pref_path_title">RTSP Path</string>
+    <string name="pref_transport_title">Transport Mode</string>
+    <string name="pref_transport_sum">UDP or TCP interleaved</string>
+    <string name="pref_hw_title">Hardware Features</string>
+    <string name="pref_ois_title">Optical Stabilization (OIS)</string>
+    <string name="pref_eis_title">Electronic Stabilization (EIS)</string>
+    <string name="pref_sys_title">System</string>
+    <string name="pref_lang_title">Interface Language</string>
+    <string name="encoder_failed">Encoder initialization failed. Try lower resolution or bitrate.</string>
+</resources>
