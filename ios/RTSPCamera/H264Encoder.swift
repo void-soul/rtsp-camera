@@ -123,6 +123,132 @@ class H264Encoder {
     deinit {
         stop()
     }
+    
+    fileprivate func handleCompressionOutput(status: OSStatus, infoFlags: VTEncodeInfoFlags, sampleBuffer: CMSampleBuffer?) {
+        guard status == noErr, let sampleBuffer = sampleBuffer else {
+            print("Compression callback returned error: \(status)")
+            return
+        }
+        
+        // Check if keyframe
+        var isKeyFrame = false
+        let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+        if let attachments = attachmentsArray as? [CFDictionary], !attachments.isEmpty {
+            let dict = attachments[0]
+            let notSync = CFDictionaryGetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_NotSync).toOpaque())
+            isKeyFrame = (notSync == nil)
+        }
+        
+        // Extract format description to get SPS/PPS/VPS
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
+        
+        // Extract SPS/PPS/VPS when keyframe comes or if they are missing
+        if isKeyFrame && (sps == nil || pps == nil) {
+            if currentCodec.lowercased() == "h265" {
+                var vpsSize = 0, spsSize = 0, ppsSize = 0
+                var vpsCount = 0, spsCount = 0, ppsCount = 0
+                var vpsPointer: UnsafePointer<UInt8>?, spsPointer: UnsafePointer<UInt8>?, ppsPointer: UnsafePointer<UInt8>?
+                
+                // In iOS, HEVC parameters are extracted via CMVideoFormatDescriptionGetHEVCParameterSetAtIndex
+                // Since we need it to be dynamic, let's call the standard OS entry points
+                if #available(iOS 11.0, *) {
+                    // H.265 parameter extraction
+                    var nalHeaderLength: Int32 = 0
+                    
+                    let vpsStatus = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
+                        formatDescription, parameterSetIndex: 0,
+                        parameterSetPointerOut: &vpsPointer, parameterSetSizeOut: &vpsSize, parameterSetCountOut: &vpsCount,
+                        nalUnitHeaderLengthOut: &nalHeaderLength
+                    )
+                    let spsStatus = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
+                        formatDescription, parameterSetIndex: 1,
+                        parameterSetPointerOut: &spsPointer, parameterSetSizeOut: &spsSize, parameterSetCountOut: &spsCount,
+                        nalUnitHeaderLengthOut: &nalHeaderLength
+                    )
+                    let ppsStatus = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
+                        formatDescription, parameterSetIndex: 2,
+                        parameterSetPointerOut: &ppsPointer, parameterSetSizeOut: &ppsSize, parameterSetCountOut: &ppsCount,
+                        nalUnitHeaderLengthOut: &nalHeaderLength
+                    )
+                    
+                    if vpsStatus == noErr, spsStatus == noErr, ppsStatus == noErr,
+                       let vpsPtr = vpsPointer, let spsPtr = spsPointer, let ppsPtr = ppsPointer {
+                        vps = Data(bytes: vpsPtr, count: vpsSize)
+                        sps = Data(bytes: spsPtr, count: spsSize)
+                        pps = Data(bytes: ppsPtr, count: ppsSize)
+                    }
+                }
+            } else {
+                // H.264 parameter extraction
+                var spsSize = 0, ppsSize = 0
+                var spsCount = 0, ppsCount = 0
+                var spsPointer: UnsafePointer<UInt8>?, ppsPointer: UnsafePointer<UInt8>?
+                var nalHeaderLength: Int32 = 0
+                
+                let spsStatus = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                    formatDescription, parameterSetIndex: 0,
+                    parameterSetPointerOut: &spsPointer, parameterSetSizeOut: &spsSize, parameterSetCountOut: &spsCount,
+                    nalUnitHeaderLengthOut: &nalHeaderLength
+                )
+                let ppsStatus = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                    formatDescription, parameterSetIndex: 1,
+                    parameterSetPointerOut: &ppsPointer, parameterSetSizeOut: &ppsSize, parameterSetCountOut: &ppsCount,
+                    nalUnitHeaderLengthOut: &nalHeaderLength
+                )
+                
+                if spsStatus == noErr, ppsStatus == noErr,
+                   let spsPtr = spsPointer, let ppsPtr = ppsPointer {
+                    sps = Data(bytes: spsPtr, count: spsSize)
+                    pps = Data(bytes: ppsPtr, count: ppsSize)
+                }
+            }
+        }
+        
+        // Read the NALUs from block buffer and convert AVCC to Annex-B (prepending 0x00000001)
+        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
+        
+        var totalLength = 0
+        var dataPointer: UnsafeMutablePointer<CChar>?
+        let statusBlock = CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &totalLength, dataPointerOut: &dataPointer)
+        
+        guard statusBlock == kCMBlockBufferNoErr, let rawData = dataPointer else { return }
+        
+        var offset = 0
+        var streamData = Data()
+        
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let timeUs = Int64(CMTimeGetSeconds(pts) * 1_000_000)
+        
+        while offset < totalLength - 4 {
+            // Read 4-byte big-endian NALU length
+            var naluLength: UInt32 = 0
+            memcpy(&naluLength, rawData.advanced(by: offset), 4)
+            naluLength = CFSwapInt32BigToHost(naluLength)
+            
+            let startCode = Data([0x00, 0x00, 0x00, 0x01])
+            streamData.append(startCode)
+            
+            let naluPtr = rawData.advanced(by: offset + 4)
+            streamData.append(UnsafeBufferPointer(start: UnsafePointer<UInt8>(OpaquePointer(naluPtr)), count: Int(naluLength)))
+            
+            offset += 4 + Int(naluLength)
+        }
+        
+        // Update FPS counter
+        frameCount += 1
+        let now = CACurrentMediaTime()
+        if lastFpsTimestamp == 0 {
+            lastFpsTimestamp = now
+        }
+        let elapsed = now - lastFpsTimestamp
+        if elapsed >= 1.0 {
+            currentFps = Double(frameCount) / elapsed
+            frameCount = 0
+            lastFpsTimestamp = now
+        }
+        
+        callback?(streamData, isKeyFrame, timeUs)
+    }
 }
 
 // Global Callback function for VideoToolbox compression
@@ -133,129 +259,7 @@ private let compressionCallback: VTCompressionOutputCallback = { (
     infoFlags,
     sampleBuffer
 ) in
-    guard status == noErr, let sampleBuffer = sampleBuffer else {
-        print("Compression callback returned error: \(status)")
-        return
-    }
-    
-    let encoder = Unmanaged<H264Encoder>.fromOpaque(outputCallbackRefCon!).takeUnretainedValue()
-    
-    // Check if keyframe
-    var isKeyFrame = false
-    let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
-    if let attachments = attachmentsArray as? [CFDictionary], !attachments.isEmpty {
-        let dict = attachments[0]
-        let notSync = CFDictionaryGetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_NotSync).toOpaque())
-        isKeyFrame = (notSync == nil)
-    }
-    
-    // Extract format description to get SPS/PPS/VPS
-    guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
-    
-    // Extract SPS/PPS/VPS when keyframe comes or if they are missing
-    if isKeyFrame && (encoder.sps == nil || encoder.pps == nil) {
-        if encoder.currentCodec.lowercased() == "h265" {
-            var vpsSize = 0, spsSize = 0, ppsSize = 0
-            var vpsCount = 0, spsCount = 0, ppsCount = 0
-            var vpsPointer: UnsafePointer<UInt8>?, spsPointer: UnsafePointer<UInt8>?, ppsPointer: UnsafePointer<UInt8>?
-            
-            // In iOS, HEVC parameters are extracted via CMVideoFormatDescriptionGetHEVCParameterSetAtIndex
-            // Since we need it to be dynamic, let's call the standard OS entry points
-            if #available(iOS 11.0, *) {
-                // H.265 parameter extraction
-                var nalHeaderLength: Int32 = 0
-                
-                let vpsStatus = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
-                    formatDescription, parameterSetIndex: 0,
-                    parameterSetPointerOut: &vpsPointer, parameterSetSizeOut: &vpsSize, parameterSetCountOut: &vpsCount,
-                    nalUnitHeaderLengthOut: &nalHeaderLength
-                )
-                let spsStatus = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
-                    formatDescription, parameterSetIndex: 1,
-                    parameterSetPointerOut: &spsPointer, parameterSetSizeOut: &spsSize, parameterSetCountOut: &spsCount,
-                    nalUnitHeaderLengthOut: &nalHeaderLength
-                )
-                let ppsStatus = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
-                    formatDescription, parameterSetIndex: 2,
-                    parameterSetPointerOut: &ppsPointer, parameterSetSizeOut: &ppsSize, parameterSetCountOut: &ppsCount,
-                    nalUnitHeaderLengthOut: &nalHeaderLength
-                )
-                
-                if vpsStatus == noErr, spsStatus == noErr, ppsStatus == noErr,
-                   let vpsPtr = vpsPointer, let spsPtr = spsPointer, let ppsPtr = ppsPointer {
-                    encoder.vps = Data(bytes: vpsPtr, count: vpsSize)
-                    encoder.sps = Data(bytes: spsPtr, count: spsSize)
-                    encoder.pps = Data(bytes: ppsPtr, count: ppsSize)
-                }
-            }
-        } else {
-            // H.264 parameter extraction
-            var spsSize = 0, ppsSize = 0
-            var spsCount = 0, ppsCount = 0
-            var spsPointer: UnsafePointer<UInt8>?, ppsPointer: UnsafePointer<UInt8>?
-            var nalHeaderLength: Int32 = 0
-            
-            let spsStatus = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
-                formatDescription, parameterSetIndex: 0,
-                parameterSetPointerOut: &spsPointer, parameterSetSizeOut: &spsSize, parameterSetCountOut: &spsCount,
-                nalUnitHeaderLengthOut: &nalHeaderLength
-            )
-            let ppsStatus = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
-                formatDescription, parameterSetIndex: 1,
-                parameterSetPointerOut: &ppsPointer, parameterSetSizeOut: &ppsSize, parameterSetCountOut: &ppsCount,
-                nalUnitHeaderLengthOut: &nalHeaderLength
-            )
-            
-            if spsStatus == noErr, ppsStatus == noErr,
-               let spsPtr = spsPointer, let ppsPtr = ppsPointer {
-                encoder.sps = Data(bytes: spsPtr, count: spsSize)
-                encoder.pps = Data(bytes: ppsPtr, count: ppsSize)
-            }
-        }
-    }
-    
-    // Read the NALUs from block buffer and convert AVCC to Annex-B (prepending 0x00000001)
-    guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
-    
-    var totalLength = 0
-    var dataPointer: UnsafeMutablePointer<CChar>?
-    let status = CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &totalLength, dataPointerOut: &dataPointer)
-    
-    guard status == kCMBlockBufferNoErr, let rawData = dataPointer else { return }
-    
-    var offset = 0
-    var streamData = Data()
-    
-    let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-    let timeUs = Int64(CMTimeGetSeconds(pts) * 1_000_000)
-    
-    while offset < totalLength - 4 {
-        // Read 4-byte big-endian NALU length
-        var naluLength: UInt32 = 0
-        memcpy(&naluLength, rawData.advanced(by: offset), 4)
-        naluLength = CFSwapInt32BigToHost(naluLength)
-        
-        let startCode = Data([0x00, 0x00, 0x00, 0x01])
-        streamData.append(startCode)
-        
-        let naluPtr = rawData.advanced(by: offset + 4)
-        streamData.append(UnsafeBufferPointer(start: UnsafePointer<UInt8>(OpaquePointer(naluPtr)), count: Int(naluLength)))
-        
-        offset += 4 + Int(naluLength)
-    }
-    
-    // Update FPS counter
-    encoder.frameCount += 1
-    let now = CACurrentMediaTime()
-    if encoder.lastFpsTimestamp == 0 {
-        encoder.lastFpsTimestamp = now
-    }
-    let elapsed = now - encoder.lastFpsTimestamp
-    if elapsed >= 1.0 {
-        encoder.currentFps = Double(encoder.frameCount) / elapsed
-        encoder.frameCount = 0
-        encoder.lastFpsTimestamp = now
-    }
-
-    encoder.callback?(streamData, isKeyFrame, timeUs)
+    guard let refCon = outputCallbackRefCon else { return }
+    let encoder = Unmanaged<H264Encoder>.fromOpaque(refCon).takeUnretainedValue()
+    encoder.handleCompressionOutput(status: status, infoFlags: infoFlags, sampleBuffer: sampleBuffer)
 }
