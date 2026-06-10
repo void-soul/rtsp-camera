@@ -75,7 +75,8 @@ class PerformanceMonitor {
             if (flags & IFF_UP) != 0 && (flags & IFF_LOOPBACK) == 0 {
                 let name = String(cString: addr.pointee.ifa_name)
                 if name.hasPrefix("en") || name.hasPrefix("bridge") || name.hasPrefix("pdp_ip") {
-                    if let data = addr.pointee.ifa_data?.assumingMemoryBound(to: LocalIfData.self) {
+                    if let rawData = addr.pointee.ifa_data {
+                        let data = rawData.assumingMemoryBound(to: LocalIfData.self)
                         txTotal += UInt64(data.pointee.ifi_obytes)
                         rxTotal += UInt64(data.pointee.ifi_ibytes)
                     }
@@ -91,9 +92,9 @@ class PerformanceMonitor {
     func getMemoryUsage() -> String {
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
-        let result = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+        let result = withUnsafeMutablePointer(to: &info) { ptr in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPtr in
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), reboundPtr, &count)
             }
         }
         guard result == KERN_SUCCESS else { return "MEM: N/A" }
@@ -136,17 +137,18 @@ class PerformanceMonitor {
         let result = task_threads(mach_task_self_, &threadList, &threadCount)
         guard result == KERN_SUCCESS, let threads = threadList else { return 0 }
         defer {
-            let size = vm_size_t(threadCount) * vm_size_t(MemoryLayout<thread_t>.size)
-            vm_deallocate(mach_task_self_, vm_address_t(bitPattern: threads), size)
+            let size = vm_size_t(threadCount) * vm_size_t(MemoryLayout<thread_act_t>.size)
+            let addrVal = UInt(bitPattern: threads)
+            vm_deallocate(mach_task_self_, vm_address_t(addrVal), size)
         }
 
         var totalTimeNs: UInt64 = 0
         for i in 0..<Int(threadCount) {
             var info = thread_basic_info()
             var count = mach_msg_type_number_t(MemoryLayout<thread_basic_info>.size / MemoryLayout<integer_t>.size)
-            let kr = withUnsafeMutablePointer(to: &info) {
-                $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                    thread_info(threads[i], thread_flavor_t(THREAD_BASIC_INFO), $0, &count)
+            let kr = withUnsafeMutablePointer(to: &info) { ptr in
+                ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPtr in
+                    thread_info(threads[i], thread_flavor_t(THREAD_BASIC_INFO), reboundPtr, &count)
                 }
             }
             if kr == KERN_SUCCESS {
