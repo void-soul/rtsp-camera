@@ -4,6 +4,28 @@ import UIKit
 private let IFF_UP = Int32(0x1)
 private let IFF_LOOPBACK = Int32(0x8)
 
+// Replicate the BSD if_data layout for statistics since net/if.h is not bridged by default in Swift
+private struct if_data {
+    var ifi_type: UInt8 = 0
+    var ifi_typelen: UInt8 = 0
+    var ifi_physical: UInt8 = 0
+    var ifi_addrlen: UInt8 = 0
+    var ifi_hdrlen: UInt8 = 0
+    var ifi_recvquota: UInt8 = 0
+    var ifi_xmitquota: UInt8 = 0
+    var ifi_unused1: UInt8 = 0
+    var ifi_mtu: UInt32 = 0
+    var ifi_metric: UInt32 = 0
+    var ifi_baudrate: UInt32 = 0
+    var ifi_ipackets: UInt32 = 0
+    var ifi_ierrors: UInt32 = 0
+    var ifi_opackets: UInt32 = 0
+    var ifi_oerrors: UInt32 = 0
+    var ifi_collisions: UInt32 = 0
+    var ifi_ibytes: UInt32 = 0
+    var ifi_obytes: UInt32 = 0
+}
+
 class PerformanceMonitor {
     private var lastTxBytes: UInt64 = 0
     private var lastRxBytes: UInt64 = 0
