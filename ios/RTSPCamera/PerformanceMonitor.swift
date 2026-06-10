@@ -93,7 +93,7 @@ class PerformanceMonitor {
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
         let result = withUnsafeMutablePointer(to: &info) {
             $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self(), task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
             }
         }
         guard result == KERN_SUCCESS else { return "MEM: N/A" }
@@ -133,11 +133,11 @@ class PerformanceMonitor {
     private func getProcessCpuTimeNs() -> UInt64 {
         var threadList: thread_act_array_t?
         var threadCount: mach_msg_type_number_t = 0
-        let result = task_threads(mach_task_self(), &threadList, &threadCount)
+        let result = task_threads(mach_task_self_, &threadList, &threadCount)
         guard result == KERN_SUCCESS, let threads = threadList else { return 0 }
         defer {
             let size = vm_size_t(threadCount) * vm_size_t(MemoryLayout<thread_t>.size)
-            vm_deallocate(mach_task_self(), vm_address_t(bitPattern: threads), size)
+            vm_deallocate(mach_task_self_, vm_address_t(bitPattern: threads), size)
         }
 
         var totalTimeNs: UInt64 = 0
