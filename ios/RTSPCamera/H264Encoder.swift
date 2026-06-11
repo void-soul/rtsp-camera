@@ -7,11 +7,11 @@ class H264Encoder {
     private var session: VTCompressionSession?
     let lock = NSLock()
     
-    private var callback: ((Data, Bool, Int64) -> Void)?
+    fileprivate var callback: ((Data, Bool, Int64) -> Void)?
     
-    private var _sps: Data?
-    private var _pps: Data?
-    private var _vps: Data?
+    fileprivate var _sps: Data?
+    fileprivate var _pps: Data?
+    fileprivate var _vps: Data?
     
     var sps: Data? {
         lock.lock()
@@ -44,7 +44,7 @@ class H264Encoder {
     // FPS counter
     var frameCount: Int = 0
     var lastFpsTimestamp: TimeInterval = 0
-    private var _currentFps: Double = 0.0
+    fileprivate var _currentFps: Double = 0.0
     
     var currentFps: Double {
         lock.lock()
