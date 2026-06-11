@@ -63,8 +63,8 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
                 print("Could not create video input: \(error)")
             }
             
-            // Set Frame Rate (FPS)
-            self.configureFPS(device: videoDevice, fps: fps)
+            // Set Frame Rate (FPS) — must match resolution to avoid overriding session preset
+            self.configureFPS(device: videoDevice, targetWidth: width, targetHeight: height, fps: fps)
             
             // Add Audio Input if enabled
             if audioEnabled {
@@ -153,28 +153,56 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         return discoverySession.devices.first
     }
     
-    private func configureFPS(device: AVCaptureDevice, fps: Int) {
+    private func configureFPS(device: AVCaptureDevice, targetWidth: Int, targetHeight: Int, fps: Int) {
         do {
             try device.lockForConfiguration()
-            
-            var targetFormat: AVCaptureDevice.Format? = nil
+
+            let targetPixels = targetWidth * targetHeight
+
+            // Find format matching BOTH resolution and FPS
+            var bestFormat: AVCaptureDevice.Format?
+            var bestPixelDiff = Int.max
+
             for format in device.formats {
-                let ranges = format.videoSupportedFrameRateRanges
-                for range in ranges {
-                    if range.maxFrameRate >= Double(fps) && range.minFrameRate <= Double(fps) {
-                        targetFormat = format
-                        break
-                    }
+                // Check FPS support
+                let supportsFps = format.videoSupportedFrameRateRanges.contains {
+                    $0.minFrameRate <= Double(fps) && $0.maxFrameRate >= Double(fps)
                 }
-                if targetFormat != nil { break }
+                guard supportsFps else { continue }
+
+                // Check resolution match
+                let desc = format.formatDescription
+                let dims = CMVideoFormatDescriptionGetDimensions(desc)
+                let w = Int(dims.width)
+                let h = Int(dims.height)
+
+                // Only consider formats with same aspect ratio (16:9 for our presets)
+                let isLandscape = w >= h
+                let fw = isLandscape ? w : h
+                let fh = isLandscape ? h : w
+                let tw = max(targetWidth, targetHeight)
+                let th = min(targetWidth, targetHeight)
+
+                guard fw >= tw && fh >= th else { continue }
+
+                let diff = (fw * fh) - targetPixels
+                if diff < bestPixelDiff {
+                    bestPixelDiff = diff
+                    bestFormat = format
+                }
             }
-            
-            if let format = targetFormat {
+
+            if let format = bestFormat {
                 device.activeFormat = format
                 device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
                 device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
+            } else {
+                // Fallback: just set FPS duration without changing format
+                // (let session preset handle resolution)
+                device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
+                device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
             }
-            
+
             device.unlockForConfiguration()
         } catch {
             print("Could not lock device for FPS configuration: \(error)")
