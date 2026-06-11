@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Combine
 import QuartzCore
+import CoreMedia
 
 class SharedStreamState {
     private var streamStartPtsUs: Int64 = -1
