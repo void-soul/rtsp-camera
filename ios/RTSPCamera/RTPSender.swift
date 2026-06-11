@@ -20,7 +20,7 @@ class RTCPSender {
     // ABR callback for packet loss feedback
     var onPacketLoss: ((UInt8) -> Void)?
     
-    init(clientHost: String, clientPort: UInt16, ssrc: UInt32, clockRate: UInt32) {
+    init(clientHost: String, clientPort: UInt16, localPort: UInt16?, ssrc: UInt32, clockRate: UInt32) {
         self.ssrc = ssrc
         self.clockRate = clockRate
         
@@ -28,6 +28,9 @@ class RTCPSender {
         let port = NWEndpoint.Port(integerLiteral: clientPort)
         let parameters = NWParameters.udp
         parameters.allowLocalEndpointReuse = true
+        if let local = localPort {
+            parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: NWEndpoint.Port(integerLiteral: local))
+        }
         self.connection = NWConnection(host: host, port: port, using: parameters)
     }
     
@@ -146,6 +149,7 @@ class RTPSender {
     var onPacketLoss: ((UInt8) -> Void)?
     private let clientHost: String
     private let clientPort: UInt16
+    private let localPort: UInt16?
     private let isTcp: Bool
     private let codec: String
     private let tcpChannel: Int
@@ -159,7 +163,7 @@ class RTPSender {
     private var sequenceNumber: UInt16 = UInt16.random(in: 0...65535)
     private var ssrc: UInt32 = UInt32.random(in: 0...UInt32.max)
     private var timestamp: UInt32 = 0
-    private var streamStartPtsUs: Int64 = -1
+    private let sharedState: SharedStreamState
     
     private var rtcpSender: RTCPSender?
     private var sentCodecConfig = false
@@ -181,23 +185,27 @@ class RTPSender {
     
     init(clientHost: String,
          clientPort: UInt16,
+         localPort: UInt16? = nil,
          codec: String,
          isTcp: Bool,
          tcpConnection: NWConnection?,
          tcpChannel: Int,
          clockRate: UInt32 = 90000,
+         sharedState: SharedStreamState,
          getSps: (() -> Data?)? = nil,
          getPps: (() -> Data?)? = nil,
          getVps: (() -> Data?)? = nil) {
         
         self.clientHost = clientHost
         self.clientPort = clientPort
+        self.localPort = localPort
         self.codec = codec.lowercased()
         self.isH265 = (self.codec == "h265")
         self.isTcp = isTcp
         self.tcpConnection = tcpConnection
         self.tcpChannel = tcpChannel
         self.clockRate = clockRate
+        self.sharedState = sharedState
         
         self.getSps = getSps
         self.getPps = getPps
@@ -207,7 +215,7 @@ class RTPSender {
     func start() {
         queue.async { [weak self] in
             guard let self = self else { return }
-            print("[RTSPCamera] RTPSender \(self.codec) starting: host=\(self.clientHost), port=\(self.clientPort), isTcp=\(self.isTcp)")
+            print("[RTSPCamera] RTPSender \(self.codec) starting: host=\(self.clientHost), port=\(self.clientPort), isTcp=\(self.isTcp), localPort=\(self.localPort ?? 0)")
             
             if !self.isTcp {
                 // Initialize UDP sockets
@@ -217,6 +225,9 @@ class RTPSender {
                 
                 let rtpParams = NWParameters.udp
                 rtpParams.allowLocalEndpointReuse = true
+                if let local = self.localPort {
+                    rtpParams.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: NWEndpoint.Port(integerLiteral: local))
+                }
                 
                 let rtpConn = NWConnection(host: host, port: rtpPort, using: rtpParams)
                 self.rtpUdpConnection = rtpConn
@@ -239,10 +250,14 @@ class RTPSender {
                 
                 let rtcpParams = NWParameters.udp
                 rtcpParams.allowLocalEndpointReuse = true
+                if let local = self.localPort {
+                    let rtcpLocalPort = local + 1
+                    rtcpParams.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: NWEndpoint.Port(integerLiteral: rtcpLocalPort))
+                }
                 self.rtcpUdpConnection = NWConnection(host: host, port: rtcpPort, using: rtcpParams)
-                // Note: rtcpUdpConnection start is handled by rtcpSender below
                 
-                let rtcp = RTCPSender(clientHost: self.clientHost, clientPort: self.clientPort + 1, ssrc: self.ssrc, clockRate: self.clockRate)
+                let rtcpLocal = self.localPort != nil ? self.localPort! + 1 : nil
+                let rtcp = RTCPSender(clientHost: self.clientHost, clientPort: self.clientPort + 1, localPort: rtcpLocal, ssrc: self.ssrc, clockRate: self.clockRate)
                 rtcp.onPacketLoss = { [weak self] fractionLost in
                     self?.onPacketLoss?(fractionLost)
                 }
@@ -280,11 +295,11 @@ class RTPSender {
             guard let self = self else { return }
 
             // Maintain timestamp
-            if self.streamStartPtsUs == -1 {
-                self.streamStartPtsUs = timestampUs
+            let startPts = self.sharedState.getOrSetStartPts(timestampUs)
+            if self.wallStartUs == -1 {
                 self.wallStartUs = Int64(CACurrentMediaTime() * 1_000_000)
             }
-            let relativePtsUs = timestampUs - self.streamStartPtsUs
+            let relativePtsUs = timestampUs - startPts
             self.timestamp = UInt32((relativePtsUs * Int64(self.clockRate) / 1000000) & 0xFFFFFFFF)
 
             self.debugFrameCount += 1
@@ -359,10 +374,8 @@ class RTPSender {
             guard let self = self else { return }
             
             // Maintain timestamp
-            if self.streamStartPtsUs == -1 {
-                self.streamStartPtsUs = timestampUs
-            }
-            let relativePtsUs = timestampUs - self.streamStartPtsUs
+            let startPts = self.sharedState.getOrSetStartPts(timestampUs)
+            let relativePtsUs = timestampUs - startPts
             self.timestamp = UInt32((relativePtsUs * Int64(self.clockRate) / 1000000) & 0xFFFFFFFF)
             
             self.debugFrameCount += 1

@@ -5,6 +5,26 @@ import QuartzCore
 import CoreMedia
 import AVFoundation
 
+class SharedStreamState {
+    private var streamStartPtsUs: Int64 = -1
+    private let lock = NSLock()
+    
+    func getOrSetStartPts(_ pts: Int64) -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        if streamStartPtsUs == -1 {
+            streamStartPtsUs = pts
+        }
+        return streamStartPtsUs
+    }
+    
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        streamStartPtsUs = -1
+    }
+}
+
 class StreamManager: NSObject, ObservableObject {
     static let shared = StreamManager()
 
@@ -42,6 +62,7 @@ class StreamManager: NSObject, ObservableObject {
     
     private var videoSender: RTPSender?
     private var audioSender: RTPSender?
+    private let sharedStreamState = SharedStreamState()
     
     private var displayLink: CADisplayLink?
     private var cancellables = Set<AnyCancellable>()
@@ -259,9 +280,14 @@ class StreamManager: NSObject, ObservableObject {
     ) {
         let settings = SettingsManager.shared
 
+        print("[RTSPCamera] startStreaming called: host=\(clientHost), videoPort=\(videoPort), audioPort=\(audioPort), isTcp=\(isTcp), videoCh=\(videoCh), audioCh=\(audioCh)")
+
         DispatchQueue.main.async {
             self.transportMode = isTcp ? "TCP" : "UDP"
         }
+
+        // Reset the relative timestamp start offset
+        sharedStreamState.reset()
 
         // Clear stale frames from the queue to avoid initial latency
         videoFrameProvider.clearFilledQueue()
@@ -284,11 +310,13 @@ class StreamManager: NSObject, ObservableObject {
         videoSender = RTPSender(
             clientHost: clientHost,
             clientPort: videoPort,
+            localPort: isTcp ? nil : 50000,
             codec: settings.videoCodec,
             isTcp: isTcp,
             tcpConnection: connection,
             tcpChannel: videoCh,
             clockRate: 90000,
+            sharedState: sharedStreamState,
             getSps: { [weak self] in self?.videoEncoder.sps },
             getPps: { [weak self] in self?.videoEncoder.pps },
             getVps: { [weak self] in self?.videoEncoder.vps }
@@ -308,11 +336,13 @@ class StreamManager: NSObject, ObservableObject {
             audioSender = RTPSender(
                 clientHost: clientHost,
                 clientPort: audioPort,
+                localPort: isTcp ? nil : 50002,
                 codec: "aac",
                 isTcp: isTcp,
                 tcpConnection: connection,
                 tcpChannel: audioCh,
-                clockRate: 44100
+                clockRate: 44100,
+                sharedState: sharedStreamState
             )
             audioSender?.start()
             

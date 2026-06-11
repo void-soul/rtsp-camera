@@ -198,8 +198,13 @@ private class RTSPSession {
                     print("[RTSPCamera] Client Request:\n\(requestString.trimmingCharacters(in: .whitespacesAndNewlines))")
                     let (response, isPlayRequest) = processRequest(requestString)
                     print("[RTSPCamera] Server Response:\n\(response.trimmingCharacters(in: .whitespacesAndNewlines))")
-                    connection.send(content: response.data(using: .utf8), completion: .contentProcessed({ [weak self] _ in
+                    connection.send(content: response.data(using: .utf8), completion: .contentProcessed({ [weak self] error in
                         guard let self = self else { return }
+                        if let error = error {
+                            print("[RTSPCamera] Error sending response: \(error)")
+                        } else {
+                            print("[RTSPCamera] Response sent successfully, isPlayRequest = \(isPlayRequest)")
+                        }
                         if isPlayRequest {
                             self.triggerSessionPlay()
                         }
@@ -210,9 +215,11 @@ private class RTSPSession {
     }
     
     private func triggerSessionPlay() {
+        print("[RTSPCamera] triggerSessionPlay called. isPlaying = \(isPlaying)")
         if !isPlaying {
             isPlaying = true
             let clientIp = getClientIp()
+            print("[RTSPCamera] Triggering server.onSessionPlay: host=\(clientIp), videoPort=\(clientVideoPort), audioPort=\(clientAudioPort), useTcp=\(useTcp)")
             server?.onSessionPlay?(clientIp, clientVideoPort, clientAudioPort, useTcp, connection, videoTcpChannel, audioTcpChannel)
         }
     }
@@ -301,6 +308,7 @@ private class RTSPSession {
             return (buildResponse("200 OK", transportResp), false)
             
         case "PLAY":
+            print("[RTSPCamera] PLAY request parsed successfully. Session: \(rtspSessionId)")
             return (buildResponse("200 OK", "Session: \(rtspSessionId)"), true)
             
         case "TEARDOWN":
