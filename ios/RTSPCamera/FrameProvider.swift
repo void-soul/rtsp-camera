@@ -118,6 +118,13 @@ class VideoFrameProvider {
         clearFilledQueue()
     }
 
+    func resetDroppedFrameStats() {
+        lock.lock()
+        totalDroppedFrames = 0
+        lastKeyframeRequestTime = 0
+        lock.unlock()
+    }
+
     // MARK: - SPS/PPS/VPS management
 
     func setParameterSets(data: Data) {

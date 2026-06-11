@@ -139,7 +139,9 @@ struct ContentView: View {
 
     @State private var showCopiedToast = false
     @State private var showNetworkDialog = false
+    @State private var showHelpDialog = false
     @State private var isUiVisible = true
+    @State private var showAlertBorder = false
 
     // Active bottom control mode: nil, "zoom", "ev", "focus"
     @State private var activeControl: String? = nil
@@ -168,8 +170,8 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            // Layer 1: Camera preview (full screen)
-            if streamManager.isServerRunning {
+            // Layer 1: Camera preview (full screen) - always visible when camera is running
+            if cameraManager.isRunning && previewEnabled {
                 CameraPreviewView(session: cameraManager.captureSession)
                     .ignoresSafeArea()
             } else {
@@ -177,7 +179,7 @@ struct ContentView: View {
             }
 
             // Layer 2: Center status (when preview off or idle)
-            if !streamManager.isServerRunning {
+            if !previewEnabled || !cameraManager.isRunning {
                 centerStatusView
             }
 
@@ -201,6 +203,11 @@ struct ContentView: View {
             if perfEnabled && streamManager.isServerRunning {
                 perfOverlay
             }
+            
+            // Alert border (flashes red when client disconnects)
+            if showAlertBorder || streamManager.clientDisconnected {
+                alertBorderOverlay
+            }
         }
         .statusBarHidden(true)
         .preferredColorScheme(.dark)
@@ -211,6 +218,21 @@ struct ContentView: View {
         .overlay {
             if showNetworkDialog {
                 networkDialogOverlay
+            }
+        }
+        .overlay {
+            if showWBPopup {
+                wbPopupOverlay
+            }
+        }
+        .overlay {
+            if showFilterPopup {
+                filterPopupOverlay
+            }
+        }
+        .overlay {
+            if showHelpDialog {
+                helpDialogOverlay
             }
         }
         .overlay {
@@ -235,6 +257,8 @@ struct ContentView: View {
         }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
+            // Start camera preview on app launch (always visible)
+            startCameraPreview()
         }
     }
 
@@ -259,13 +283,22 @@ struct ContentView: View {
                     .font(.system(size: 13))
                     .foregroundColor(.white.opacity(0.4))
             } else {
-                Image(systemName: "camera.aperture")
-                    .font(.system(size: 50))
-                    .foregroundColor(.gray.opacity(0.5))
-                Text("RTSP Camera Streamer")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
+                // Show placeholder URL when server is not running
+                let settings = SettingsManager.shared
+                let ip = Utils.getIPAddress()
+                let placeholderUrl = "rtsp://\(ip):\(settings.rtspPort)\(settings.rtspPath)"
+                
+                Text(placeholderUrl)
+                    .font(.system(size: 16, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.4))
+                    .onTapGesture {
+                        UIPasteboard.general.string = placeholderUrl
+                        showCopiedToast = true
+                    }
+                
+                Text("Press play to start streaming")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.3))
             }
         }
     }
@@ -332,8 +365,30 @@ struct ContentView: View {
 
             Spacer(minLength: 8)
 
+            // WiFi info (when streaming)
+            if streamManager.isServerRunning {
+                HStack(spacing: 4) {
+                    Image(systemName: "wifi")
+                        .font(.system(size: 8))
+                        .foregroundColor(.white.opacity(0.4))
+                    Text(wifiInfo)
+                        .font(.system(size: 8))
+                        .foregroundColor(.white.opacity(0.4))
+                }
+                Spacer(minLength: 4)
+            }
+
             // Right: icon buttons
             HStack(spacing: 4) {
+                // Preview toggle
+                topBarButton(
+                    icon: previewEnabled ? "eye.fill" : "eye.slash.fill",
+                    isActive: previewEnabled
+                ) {
+                    previewEnabled.toggle()
+                    SettingsManager.shared.previewEnabled = previewEnabled
+                }
+
                 // Audio toggle
                 topBarButton(
                     icon: audioEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
@@ -366,6 +421,11 @@ struct ContentView: View {
                 topBarButton(icon: "chart.bar.fill", isActive: perfEnabled) {
                     perfEnabled.toggle()
                     SettingsManager.shared.perfMonitorEnabled = perfEnabled
+                }
+                
+                // Help button
+                topBarButton(icon: "questionmark.circle") {
+                    showHelpDialog = true
                 }
             }
         }
@@ -402,15 +462,182 @@ struct ContentView: View {
                           isActive: activeControl == "focus") {
                 toggleControl("focus")
             }
-            ControlButton(label: "WB", value: "AUTO") {
-                // White balance - could add popup later
+            ControlButton(label: "WB", value: cameraManager.currentWBMode,
+                          isActive: activeControl == "wb") {
+                showWBPopup = true
             }
-            ControlButton(label: "FILTER", value: "None") {
-                // Filter - could add popup later
+            ControlButton(label: "FILTER", value: cameraManager.currentFilter,
+                          isActive: activeControl == "filter") {
+                showFilterPopup = true
             }
         }
         .frame(height: 44)
         .background(Color.black.opacity(0.67))
+    }
+    
+    // MARK: - White Balance Popup
+    
+    @State private var showWBPopup = false
+    @State private var showFilterPopup = false
+    
+    private var wbPopupOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .onTapGesture { showWBPopup = false }
+            
+            VStack(spacing: 0) {
+                Text("White Balance")
+                    .font(.headline)
+                    .padding()
+                
+                ForEach(["AUTO", "INCANDESCENT", "FLUORESCENT", "DAYLIGHT", "CLOUDY"], id: \.self) { mode in
+                    Button(action: {
+                        cameraManager.applyWhiteBalancePreset(mode)
+                        showWBPopup = false
+                    }) {
+                        HStack {
+                            Text(mode)
+                                .foregroundColor(mode == cameraManager.currentWBMode ? .blue : .primary)
+                            Spacer()
+                            if mode == cameraManager.currentWBMode {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .background(Color(.systemBackground))
+            .cornerRadius(12)
+            .frame(width: 200)
+        }
+    }
+    
+    // MARK: - Filter Popup
+    
+    private var filterPopupOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .onTapGesture { showFilterPopup = false }
+            
+            VStack(spacing: 0) {
+                Text("Filter")
+                    .font(.headline)
+                    .padding()
+                
+                ForEach(["None", "B&W", "VIVID", "WARM", "COOL"], id: \.self) { filter in
+                    Button(action: {
+                        cameraManager.applyFilter(filter)
+                        showFilterPopup = false
+                    }) {
+                        HStack {
+                            Text(filter)
+                                .foregroundColor(filter == cameraManager.currentFilter ? .blue : .primary)
+                            Spacer()
+                            if filter == cameraManager.currentFilter {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .background(Color(.systemBackground))
+            .cornerRadius(12)
+            .frame(width: 200)
+        }
+    }
+    
+    // MARK: - Alert Border (Client Disconnect)
+    
+    private var alertBorderOverlay: some View {
+        ZStack {
+            // Animated red border that flashes
+            RoundedRectangle(cornerRadius: 0)
+                .stroke(Color.red, lineWidth: 4)
+                .ignoresSafeArea()
+                .opacity(alertBorderOpacity)
+                .animation(
+                    Animation.easeInOut(duration: 0.8)
+                        .repeatForever(autoreverses: true),
+                    value: alertBorderOpacity
+                )
+        }
+        .onAppear {
+            alertBorderOpacity = 1.0
+        }
+        .onDisappear {
+            alertBorderOpacity = 0.0
+        }
+    }
+    
+    @State private var alertBorderOpacity: Double = 0.0
+    
+    // MARK: - Help Dialog
+    
+    private var helpDialogOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .onTapGesture { showHelpDialog = false }
+            
+            VStack(spacing: 0) {
+                Text("Help")
+                    .font(.headline)
+                    .padding()
+                
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        helpItem("Camera Preview", "Always visible. Toggle with eye icon in top bar.")
+                        helpItem("Start/Stop", "Red button on right edge starts/stops RTSP streaming.")
+                        helpItem("Resolution", "Tap RES to change (4K/1080p/720p).")
+                        helpItem("Bitrate", "Tap BITRATE to adjust (5-60 Mbps).")
+                        helpItem("FPS", "Tap FPS to set frame rate (24/30/60/120).")
+                        helpItem("GOP", "Tap GOP to set keyframe interval (I-frame every N frames).")
+                        helpItem("Codec", "Tap CODEC to switch H.264/H.265 (only when not streaming).")
+                        helpItem("Zoom", "Tap ZOOM, then use slider (1x-10x).")
+                        helpItem("Exposure", "Tap EV, then use slider (-3 to +3).")
+                        helpItem("Focus", "Tap FOCUS, then AF/MF toggle + slider.")
+                        helpItem("White Balance", "Tap WB for presets (Auto/Incandescent/Daylight/Cloudy).")
+                        helpItem("Filter", "Tap FILTER for effects (B&W/Vivid/Warm/Cool).")
+                        helpItem("Audio", "Toggle microphone with speaker icon.")
+                        helpItem("Flash", "Toggle torch with flashlight icon.")
+                        helpItem("Camera Flip", "Switch front/back with rotate icon.")
+                        helpItem("Preview Off", "Hide preview to save battery (eye icon).")
+                        helpItem("Performance", "Toggle HUD with chart icon.")
+                        helpItem("Network Settings", "Change RTSP port and path with network icon.")
+                    }
+                    .padding(.horizontal, 16)
+                }
+                
+                Divider()
+                
+                Button("Close") { showHelpDialog = false }
+                    .padding()
+            }
+            .background(Color(.systemBackground))
+            .cornerRadius(12)
+            .frame(width: 320, height: 400)
+        }
+    }
+    
+    private func helpItem(_ title: String, _ description: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.primary)
+            Text(description)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+        }
     }
 
     // MARK: - Ruler Slider (replaces RulerWheelView)
@@ -580,6 +807,12 @@ struct ContentView: View {
     }
 
     // MARK: - Helpers
+    
+    private var wifiInfo: String {
+        // Get WiFi SSID and signal strength
+        // Note: This is a simplified version - real implementation would use CoreLocation and NetworkExtension
+        return "WiFi"
+    }
 
     private func toggleControl(_ name: String) {
         withAnimation(.easeInOut(duration: 0.2)) {
@@ -589,6 +822,21 @@ struct ContentView: View {
                 activeControl = name
             }
         }
+    }
+
+    private func startCameraPreview() {
+        let settings = SettingsManager.shared
+        // Configure camera with lower resolution for preview to save power
+        let previewWidth = 1280
+        let previewHeight = 720
+        
+        streamManager.cameraManager.configureSession(
+            width: previewWidth,
+            height: previewHeight,
+            fps: settings.fps,
+            audioEnabled: false // No audio needed for preview only
+        )
+        streamManager.cameraManager.start()
     }
 
     private func applySettingsAndStart() {

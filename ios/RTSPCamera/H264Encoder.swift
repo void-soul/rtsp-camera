@@ -27,6 +27,11 @@ class H264Encoder {
         forceKeyframe = true
     }
     
+    func updateDynamicBitrate(bps: Int) {
+        guard let session = session else { return }
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bps as CFNumber)
+    }
+    
     func setCallback(_ callback: @escaping (Data, Bool, Int64) -> Void) {
         self.callback = callback
     }

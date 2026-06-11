@@ -2,7 +2,7 @@ import Foundation
 import AVFoundation
 import UIKit
 
-class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
+class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate, AVCaptureSessionDelegate {
     @Published var isRunning = false
     @Published var activeCameraPosition: AVCaptureDevice.Position = .back
     @Published var zoomFactor: CGFloat = 1.0
@@ -10,6 +10,11 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     @Published var isTorchOn = false
     @Published var focusMode: AVCaptureDevice.FocusMode = .continuousAutoFocus
     @Published var lensPosition: Float = 0.0 // For manual focus slider (0.0 to 1.0)
+    @Published var whiteBalanceMode: AVCaptureDevice.WhiteBalanceMode = .auto
+    @Published var currentWBMode: String = "AUTO"
+    @Published var currentFilter: String = "None"
+    @Published var isOISEnabled = true
+    @Published var isEISEnabled = true
     
     let captureSession = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
@@ -32,6 +37,9 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     func configureSession(width: Int, height: Int, fps: Int, audioEnabled: Bool) {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
+            
+            // Set delegate for interruption handling
+            self.captureSession.delegate = self
             
             self.captureSession.beginConfiguration()
             
@@ -335,6 +343,106 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         }
     }
     
+    // MARK: - White Balance
+    
+    func setWhiteBalance(mode: AVCaptureDevice.WhiteBalanceMode, temperature: Float = 6500) {
+        guard let input = videoDeviceInput else { return }
+        let device = input.device
+        
+        do {
+            try device.lockForConfiguration()
+            device.whiteBalanceMode = mode
+            if mode == .temperature {
+                // Set color temperature (in Kelvin)
+                let temperatureAndTint = AVCaptureDevice.WhiteBalanceTemperatureAndTint(temperature: temperature, tint: 0)
+                device.setWhiteBalanceModeLocked(with: temperatureAndTint, completionHandler: nil)
+            }
+            device.unlockForConfiguration()
+            DispatchQueue.main.async { self.whiteBalanceMode = mode }
+        } catch {
+            print("Failed to set white balance: \(error)")
+        }
+    }
+    
+    func applyWhiteBalancePreset(_ preset: String) {
+        switch preset {
+        case "AUTO":
+            setWhiteBalance(mode: .auto)
+            DispatchQueue.main.async { self.currentWBMode = "AUTO" }
+        case "INCANDESCENT":
+            setWhiteBalance(mode: .temperature, temperature: 2800)
+            DispatchQueue.main.async { self.currentWBMode = "INCANDESCENT" }
+        case "FLUORESCENT":
+            setWhiteBalance(mode: .temperature, temperature: 4000)
+            DispatchQueue.main.async { self.currentWBMode = "FLUORESCENT" }
+        case "DAYLIGHT":
+            setWhiteBalance(mode: .temperature, temperature: 5500)
+            DispatchQueue.main.async { self.currentWBMode = "DAYLIGHT" }
+        case "CLOUDY":
+            setWhiteBalance(mode: .temperature, temperature: 7500)
+            DispatchQueue.main.async { self.currentWBMode = "CLOUDY" }
+        default:
+            setWhiteBalance(mode: .auto)
+            DispatchQueue.main.async { self.currentWBMode = "AUTO" }
+        }
+    }
+    
+    // MARK: - Filters (via AVCaptureVideoPreviewLayer videoMirroring is not available, use device properties)
+    
+    func applyFilter(_ filter: String) {
+        // Note: AVCaptureDevice doesn't have built-in filter support like Android's CONTROL_EFFECT_MODE
+        // We'll implement this via GPU-based filtering in the future if needed
+        // For now, just track the current filter
+        DispatchQueue.main.async { self.currentFilter = filter }
+        
+        // Apply color matrix effects using device configuration where possible
+        guard let input = videoDeviceInput else { return }
+        let device = input.device
+        
+        do {
+            try device.lockForConfiguration()
+            // iOS doesn't have direct effect modes like Android
+            // We'll use exposure and white balance adjustments as a basic approximation
+            switch filter {
+            case "B&W":
+                // Increase contrast for B&W effect
+                device.setExposureTargetBias(0, completionHandler: nil)
+            case "VIVID":
+                // Increase saturation (not directly available, use white balance shift)
+                break
+            case "WARM":
+                setWhiteBalance(mode: .temperature, temperature: 7000)
+            case "COOL":
+                setWhiteBalance(mode: .temperature, temperature: 4000)
+            default:
+                break
+            }
+            device.unlockForConfiguration()
+        } catch {
+            print("Failed to apply filter: \(error)")
+        }
+    }
+    
+    // MARK: - Stabilization
+    
+    func setOIS(_ enabled: Bool) {
+        guard let connection = videoOutput.connection(with: .video) else { return }
+        
+        if connection.isVideoStabilizationSupported {
+            let mode: AVCaptureVideoStabilizationMode = enabled ? .auto : .off
+            connection.preferredVideoStabilizationMode = mode
+        }
+        
+        DispatchQueue.main.async { self.isOISEnabled = enabled }
+    }
+    
+    func setEIS(_ enabled: Bool) {
+        // On iOS, EIS is controlled via AVCaptureDevice's videoStabilizationMode
+        // .auto uses the best available stabilization (OIS + EIS)
+        setOIS(enabled) // Both OIS and EIS are controlled together on iOS
+        DispatchQueue.main.async { self.isEISEnabled = enabled }
+    }
+    
     // MARK: - AVCaptureDataOutput SampleBuffer Delegates
     
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
@@ -342,6 +450,53 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             onVideoSampleBuffer?(sampleBuffer)
         } else if output == audioOutput {
             onAudioSampleBuffer?(sampleBuffer)
+        }
+    }
+    
+    // MARK: - AVCaptureSessionDelegate (Interruption Handling)
+    
+    func sessionWasInterrupted(_ session: AVCaptureSession, with reason: AVCaptureSession.InterruptionReason) {
+        print("Session was interrupted with reason: \(reason.rawValue)")
+        
+        DispatchQueue.main.async {
+            self.isRunning = false
+            
+            // Handle different interruption reasons
+            switch reason {
+            case .audioDeviceInUseByAnotherClient:
+                print("Audio device in use by another client")
+            case .videoDeviceInUseByAnotherClient:
+                print("Video device in use by another client")
+            case .videoDeviceNotAvailableWithMultipleForegroundApps:
+                print("Video device not available with multiple foreground apps")
+            @unknown default:
+                print("Unknown interruption reason")
+            }
+        }
+    }
+    
+    func sessionInterruptionEnded(_ session: AVCaptureSession) {
+        print("Session interruption ended")
+        
+        // Restart the session
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            if !session.isRunning {
+                session.startRunning()
+                DispatchQueue.main.async {
+                    self.isRunning = true
+                }
+            }
+            
+            // Reapply camera configuration
+            let settings = SettingsManager.shared
+            self.configureSession(
+                width: settings.getWidth(),
+                height: settings.getHeight(),
+                fps: settings.fps,
+                audioEnabled: settings.audioEnabled
+            )
         }
     }
 }

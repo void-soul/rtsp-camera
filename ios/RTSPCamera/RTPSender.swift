@@ -17,6 +17,9 @@ class RTCPSender {
     private let ntpEpochOffset: UInt64 = 2208988800
     private let srInterval: TimeInterval = 5.0
     
+    // ABR callback for packet loss feedback
+    var onPacketLoss: ((UInt8) -> Void)?
+    
     init(clientHost: String, clientPort: UInt16, ssrc: UInt32, clockRate: UInt32) {
         self.ssrc = ssrc
         self.clockRate = clockRate
@@ -94,6 +97,29 @@ class RTCPSender {
         srBuffer[24...27] = Data(withUnsafeBytes(of: octetCount.bigEndian) { Data($0) })
         
         connection?.send(content: srBuffer, completion: .contentProcessed({ _ in }))
+        
+        // Try to receive RTCP RR for ABR feedback
+        receiveRTCP()
+    }
+    
+    private func receiveRTCP() {
+        guard let connection = connection else { return }
+        
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1500) { [weak self] data, _, _, error in
+            guard let self = self, let data = data, error == nil else { return }
+            
+            // Parse RTCP RR (Receiver Report)
+            if data.count >= 28 {
+                let pt = data[1]
+                if pt == 201 { // PT=201 is RR
+                    // Extract fraction lost from byte 12
+                    if data.count >= 13 {
+                        let fractionLost = data[12]
+                        self.onPacketLoss?(fractionLost)
+                    }
+                }
+            }
+        }
     }
 }
 

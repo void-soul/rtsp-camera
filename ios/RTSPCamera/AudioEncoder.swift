@@ -89,7 +89,7 @@ class AudioEncoder {
         
         guard status == noErr else { return }
         
-        let timestampUs = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).value
+        let timestampUs = Int64(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) * 1_000_000)
         
         let buffers = UnsafeBufferPointer<AudioBuffer>(start: &audioBufferList.mBuffers, count: Int(audioBufferList.mNumberBuffers))
         for buffer in buffers {
