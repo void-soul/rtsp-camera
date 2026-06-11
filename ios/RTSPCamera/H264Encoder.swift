@@ -9,9 +9,9 @@ class H264Encoder {
     
     private var callback: ((Data, Bool, Int64) -> Void)?
     
-    private var _sps: Data?
-    private var _pps: Data?
-    private var _vps: Data?
+    fileprivate var _sps: Data?
+    fileprivate var _pps: Data?
+    fileprivate var _vps: Data?
     
     var sps: Data? {
         lock.lock()
