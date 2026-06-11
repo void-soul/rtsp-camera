@@ -1,0 +1,60 @@
+name: Build iOS App
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build-ios:
+    name: Build iOS App (Unsigned IPA)
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode Version
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Build for Simulator (Verification)
+        run: |
+          xcodebuild -project ios/RTSPCamera.xcodeproj \
+            -scheme RTSPCamera \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            build
+
+      - name: Build for Device (Unsigned Release)
+        run: |
+          xcodebuild -project ios/RTSPCamera.xcodeproj \
+            -scheme RTSPCamera \
+            -sdk iphoneos \
+            -configuration Release \
+            SYMROOT=$GITHUB_WORKSPACE/ios/build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
+
+      - name: Package Unsigned IPA
+        run: |
+          cd ios/build
+          mkdir -p Payload
+          cp -r Release-iphoneos/RTSPCamera.app Payload/
+          zip -r RTSPCamera-unsigned.ipa Payload
+          echo "IPA packaged successfully at ios/build/RTSPCamera-unsigned.ipa"
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RTSPCamera-unsigned-ipa
+          path: ios/build/RTSPCamera-unsigned.ipa
+          retention-days: 7

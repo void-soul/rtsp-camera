@@ -1,6 +1,5 @@
 import Foundation
 import Network
-import QuartzCore
 
 // MARK: - RTCPSender (Sends RTCP Sender Reports)
 class RTCPSender {
@@ -17,16 +16,18 @@ class RTCPSender {
     private let ntpEpochOffset: UInt64 = 2208988800
     private let srInterval: TimeInterval = 5.0
     
-    // ABR callback for packet loss feedback
-    var onPacketLoss: ((UInt8) -> Void)?
-    
-    init(clientHost: String, clientPort: UInt16, ssrc: UInt32, clockRate: UInt32) {
+    init(clientHost: String, clientPort: UInt16, localPort: UInt16?, ssrc: UInt32, clockRate: UInt32) {
         self.ssrc = ssrc
         self.clockRate = clockRate
         
         let host = NWEndpoint.Host(clientHost)
         let port = NWEndpoint.Port(integerLiteral: clientPort)
-        self.connection = NWConnection(host: host, port: port, using: .udp)
+        
+        let parameters = NWParameters.udp
+        if let local = localPort {
+            parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: NWEndpoint.Port(integerLiteral: local))
+        }
+        self.connection = NWConnection(host: host, port: port, using: parameters)
     }
     
     func start() {
@@ -97,29 +98,6 @@ class RTCPSender {
         srBuffer[24...27] = Data(withUnsafeBytes(of: octetCount.bigEndian) { Data($0) })
         
         connection?.send(content: srBuffer, completion: .contentProcessed({ _ in }))
-        
-        // Try to receive RTCP RR for ABR feedback
-        receiveRTCP()
-    }
-    
-    private func receiveRTCP() {
-        guard let connection = connection else { return }
-        
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 1500) { [weak self] data, _, _, error in
-            guard let self = self, let data = data, error == nil else { return }
-            
-            // Parse RTCP RR (Receiver Report)
-            if data.count >= 28 {
-                let pt = data[1]
-                if pt == 201 { // PT=201 is RR
-                    // Extract fraction lost from byte 12
-                    if data.count >= 13 {
-                        let fractionLost = data[12]
-                        self.onPacketLoss?(fractionLost)
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -128,27 +106,24 @@ class RTCPSender {
 class RTPSender {
     private let clientHost: String
     private let clientPort: UInt16
+    private let localPort: UInt16?
     private let isTcp: Bool
     private let codec: String
     private let tcpChannel: Int
     
     private var tcpConnection: NWConnection?
     private var rtpUdpConnection: NWConnection?
-    private var rtcpUdpConnection: NWConnection?
     
     private let queue = DispatchQueue(label: "com.gld.rtsp_camera.rtpSenderQueue", qos: .userInteractive)
     
     private var sequenceNumber: UInt16 = UInt16.random(in: 0...65535)
     private var ssrc: UInt32 = UInt32.random(in: 0...UInt32.max)
     private var timestamp: UInt32 = 0
-    private var streamStartPtsUs: Int64 = -1
+    private let sharedState: SharedStreamState
     
     private var rtcpSender: RTCPSender?
     private var sentCodecConfig = false
     private let maxPacketSize = 1400
-
-    // Frame pacing: track wall clock time when first frame is sent
-    private var wallStartUs: Int64 = -1
     
     // Config params
     private let isH265: Bool
@@ -161,23 +136,27 @@ class RTPSender {
     
     init(clientHost: String,
          clientPort: UInt16,
+         localPort: UInt16? = nil,
          codec: String,
          isTcp: Bool,
          tcpConnection: NWConnection?,
          tcpChannel: Int,
          clockRate: UInt32 = 90000,
+         sharedState: SharedStreamState,
          getSps: (() -> Data?)? = nil,
          getPps: (() -> Data?)? = nil,
          getVps: (() -> Data?)? = nil) {
         
         self.clientHost = clientHost
         self.clientPort = clientPort
+        self.localPort = localPort
         self.codec = codec.lowercased()
         self.isH265 = (self.codec == "h265")
         self.isTcp = isTcp
         self.tcpConnection = tcpConnection
         self.tcpChannel = tcpChannel
         self.clockRate = clockRate
+        self.sharedState = sharedState
         
         self.getSps = getSps
         self.getPps = getPps
@@ -191,14 +170,22 @@ class RTPSender {
                 // Initialize UDP sockets
                 let host = NWEndpoint.Host(self.clientHost)
                 let rtpPort = NWEndpoint.Port(integerLiteral: self.clientPort)
-                let rtcpPort = NWEndpoint.Port(integerLiteral: self.clientPort + 1)
                 
-                self.rtpUdpConnection = NWConnection(host: host, port: rtpPort, using: .udp)
+                let rtpParams = NWParameters.udp
+                if let local = self.localPort {
+                    rtpParams.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: NWEndpoint.Port(integerLiteral: local))
+                }
+                self.rtpUdpConnection = NWConnection(host: host, port: rtpPort, using: rtpParams)
                 self.rtpUdpConnection?.start(queue: self.queue)
                 
-                self.rtcpUdpConnection = NWConnection(host: host, port: rtcpPort, using: .udp)
-                
-                self.rtcpSender = RTCPSender(clientHost: self.clientHost, clientPort: self.clientPort + 1, ssrc: self.ssrc, clockRate: self.clockRate)
+                let rtcpLocalPort = self.localPort != nil ? self.localPort! + 1 : nil
+                self.rtcpSender = RTCPSender(
+                    clientHost: self.clientHost,
+                    clientPort: self.clientPort + 1,
+                    localPort: rtcpLocalPort,
+                    ssrc: self.ssrc,
+                    clockRate: self.clockRate
+                )
                 self.rtcpSender?.start()
             }
         }
@@ -212,8 +199,6 @@ class RTPSender {
             
             self.rtpUdpConnection?.cancel()
             self.rtpUdpConnection = nil
-            self.rtcpUdpConnection?.cancel()
-            self.rtcpUdpConnection = nil
             
             self.tcpConnection = nil
         }
@@ -230,76 +215,51 @@ class RTPSender {
     func sendVideoFrame(data: Data, timestampUs: Int64, isKeyFrame: Bool) {
         queue.async { [weak self] in
             guard let self = self else { return }
-
+            
             // Maintain timestamp
-            if self.streamStartPtsUs == -1 {
-                self.streamStartPtsUs = timestampUs
-                self.wallStartUs = Int64(CACurrentMediaTime() * 1_000_000)
-            }
-            let relativePtsUs = timestampUs - self.streamStartPtsUs
+            let startPts = self.sharedState.getOrSetStartPts(timestampUs)
+            let relativePtsUs = timestampUs - startPts
             self.timestamp = UInt32((relativePtsUs * Int64(self.clockRate) / 1000000) & 0xFFFFFFFF)
-
-            // Frame pacing: calculate when this frame should be sent based on PTS,
-            // so we send frames at real-time rate instead of in bursts.
-            let sendBlock = { [weak self] in
-                guard let self = self else { return }
-
-                if self.streamStartPtsUs == timestampUs {
-                    // First frame — send SPS/PPS immediately
-                    if isKeyFrame && !self.sentCodecConfig {
-                        self.sentCodecConfig = self.isH265 ? self.sendVpsSpsPps() : self.sendStapA()
-                    }
-                }
-
-                // Search NALUs inside Annex-B
-                var i = 0
-                let length = data.count
-                while i < length - 3 {
-                    var startCodeSize = 0
-                    if data[i] == 0 && data[i + 1] == 0 {
-                        if data[i + 2] == 1 {
-                            startCodeSize = 3
-                        } else if i + 3 < length && data[i + 2] == 0 && data[i + 3] == 1 {
-                            startCodeSize = 4
-                        }
-                    }
-
-                    if startCodeSize > 0 {
-                        let start = i + startCodeSize
-                        let end = self.findNextStartCode(data: data, start: start)
-                        let nalSize = end - start
-
-                        if nalSize > 0 {
-                            let isLastNALU = (end == length)
-                            if nalSize <= self.maxPacketSize {
-                                self.sendSingleNALUPacket(data: data, offset: start, size: nalSize, marker: isLastNALU)
-                            } else {
-                                self.sendFUAPackets(data: data, offset: start, size: nalSize, marker: isLastNALU)
-                            }
-                        }
-                        i = end
-                    } else {
-                        i += 1
-                    }
-                }
-
-                self.rtcpSender?.updateRtpTimestamp(self.timestamp)
+            
+            if isKeyFrame && !self.sentCodecConfig {
+                self.sentCodecConfig = self.isH265 ? self.sendVpsSpsPps() : self.sendStapA()
             }
-
-            // First frame: send immediately. Others: pace to real-time.
-            if relativePtsUs == 0 {
-                sendBlock()
-            } else {
-                let nowUs = Int64(CACurrentMediaTime() * 1_000_000)
-                let targetSendUs = self.wallStartUs + relativePtsUs
-                let delayUs = targetSendUs - nowUs
-
-                if delayUs > 1000 { // > 1ms: schedule for later
-                    self.queue.asyncAfter(deadline: .now() + .microseconds(Int(delayUs)), execute: sendBlock)
+            
+            // Search NALUs inside Annex-B
+            var i = 0
+            let length = data.count
+            while i < length - 3 {
+                var startCodeSize = 0
+                if data[i] == 0 && data[i + 1] == 0 {
+                    if data[i + 2] == 1 {
+                        startCodeSize = 3
+                    } else if i + 3 < length && data[i + 2] == 0 && data[i + 3] == 1 {
+                        startCodeSize = 4
+                    }
+                }
+                
+                if startCodeSize > 0 {
+                    let start = i + startCodeSize
+                    let end = self.findNextStartCode(data: data, start: start)
+                    let nalSize = end - start
+                    
+                    if nalSize > 0 {
+                        let nalType = self.getNalType(data: data, offset: start)
+                        let isLastNALU = (end == length)
+                        
+                        if nalSize <= self.maxPacketSize {
+                            self.sendSingleNALUPacket(data: data, offset: start, size: nalSize, marker: isLastNALU)
+                        } else {
+                            self.sendFUAPackets(data: data, offset: start, size: nalSize, marker: isLastNALU)
+                        }
+                    }
+                    i = end
                 } else {
-                    sendBlock() // Already behind schedule, send now
+                    i += 1
                 }
             }
+            
+            self.rtcpSender?.updateRtpTimestamp(self.timestamp)
         }
     }
     
@@ -308,10 +268,8 @@ class RTPSender {
             guard let self = self else { return }
             
             // Maintain timestamp
-            if self.streamStartPtsUs == -1 {
-                self.streamStartPtsUs = timestampUs
-            }
-            let relativePtsUs = timestampUs - self.streamStartPtsUs
+            let startPts = self.sharedState.getOrSetStartPts(timestampUs)
+            let relativePtsUs = timestampUs - startPts
             self.timestamp = UInt32((relativePtsUs * Int64(self.clockRate) / 1000000) & 0xFFFFFFFF)
             
             // RFC 3640 AAC
@@ -331,7 +289,7 @@ class RTPSender {
             rtpBuffer[rtpHeaderSize + 2] = UInt8((auHeader >> 8) & 0xFF)
             rtpBuffer[rtpHeaderSize + 3] = UInt8(auHeader & 0xFF)
             
-            rtpBuffer.replaceSubrange(rtpHeaderSize + auHeaderSize..<rtpBuffer.count, with: data)
+            rtpBuffer[rtpHeaderSize + auHeaderSize...] = data
             
             self.sendPacket(data: rtpBuffer)
             self.rtcpSender?.updateRtpTimestamp(self.timestamp)

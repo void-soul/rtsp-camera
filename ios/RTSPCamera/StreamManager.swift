@@ -2,10 +2,28 @@ import Foundation
 import Network
 import Combine
 import QuartzCore
-import CoreMedia
-import AVFoundation
 
-class StreamManager: NSObject, ObservableObject {
+class SharedStreamState {
+    private var streamStartPtsUs: Int64 = -1
+    private let lock = NSLock()
+    
+    func getOrSetStartPts(_ pts: Int64) -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        if streamStartPtsUs == -1 {
+            streamStartPtsUs = pts
+        }
+        return streamStartPtsUs
+    }
+    
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        streamStartPtsUs = -1
+    }
+}
+
+class StreamManager: ObservableObject {
     static let shared = StreamManager()
 
     @Published var isServerRunning = false
@@ -15,7 +33,6 @@ class StreamManager: NSObject, ObservableObject {
     @Published var streamUrl = ""
     @Published var currentFps = 0.0
     @Published var perfStatus = ""
-    @Published var clientDisconnected = false
 
     let cameraManager = CameraManager()
     private var rtspServer: SimpleRTSPServer?
@@ -29,18 +46,17 @@ class StreamManager: NSObject, ObservableObject {
     
     private var videoSender: RTPSender?
     private var audioSender: RTPSender?
+    private let sharedStreamState = SharedStreamState()
     
     private var displayLink: CADisplayLink?
     private var cancellables = Set<AnyCancellable>()
     
-    override init() {
-        super.init()
+    private init() {
         setupCallbacks()
     }
     
     private func setupCallbacks() {
-        // Handle video frame output from AVCaptureSession — always encode when server is running
-        // to ensure SPS/PPS are available for SDP before any client connects
+        // Handle video frame output from AVCaptureSession
         cameraManager.onVideoSampleBuffer = { [weak self] sampleBuffer in
             guard let self = self, self.isServerRunning else { return }
 
@@ -50,86 +66,51 @@ class StreamManager: NSObject, ObservableObject {
 
             self.videoEncoder.encode(pixelBuffer: pixelBuffer, timestampUs: timestampUs)
         }
-
+        
         // Handle audio frame output from AVCaptureSession
         cameraManager.onAudioSampleBuffer = { [weak self] sampleBuffer in
             guard let self = self, self.isServerRunning else { return }
             self.audioEncoder.encode(sampleBuffer: sampleBuffer)
         }
-
-        // Handle encoded video frames — route through frame provider for pooling and queue management
+        
+        // Handle encoded video frames
         videoEncoder.setCallback { [weak self] data, isKeyFrame, timestampUs in
             guard let self = self else { return }
-            
-            // Store SPS/PPS for SDP generation
-            if isKeyFrame, let sps = self.videoEncoder.sps, let pps = self.videoEncoder.pps {
-                self.videoFrameProvider.setParameterSets(data: sps + pps)
-            }
-            
-            // Obtain a frame from the pool, copy data, and enqueue
-            if let frame = self.videoFrameProvider.obtainEmptyFrame() {
-                let copyLength = min(data.count, frame.capacity)
-                data.copyBytes(to: frame.buffer, count: copyLength)
-                frame.length = copyLength
-                frame.timestampUs = timestampUs
-                self.videoFrameProvider.addFrame(frame)
-            }
-        }
-
-        // Handle encoded audio frames — route through frame provider for pooling
-        audioEncoder.setCallback { [weak self] data, timestampUs in
-            guard let self = self else { return }
-            
-            if let frame = self.audioFrameProvider.obtainEmptyFrame() {
-                let copyLength = min(data.count, frame.capacity)
-                data.copyBytes(to: frame.buffer, count: copyLength)
-                frame.length = copyLength
-                frame.timestampUs = timestampUs
-                self.audioFrameProvider.addFrame(frame)
-            }
+            self.videoSender?.sendVideoFrame(data: data, timestampUs: timestampUs, isKeyFrame: isKeyFrame)
         }
         
-        // Set up keyframe requester for overflow recovery
-        videoFrameProvider.keyframeRequester = { [weak self] in
-            self?.videoEncoder.requestKeyframe()
+        // Handle encoded audio frames
+        audioEncoder.setCallback { [weak self] data, timestampUs in
+            guard let self = self else { return }
+            self.audioSender?.sendAudioFrame(data: data, timestampUs: timestampUs)
         }
     }
     
     func startServer() {
         guard !isServerRunning else { return }
-
+        
         let settings = SettingsManager.shared
         let ip = Utils.getIPAddress()
         streamUrl = "rtsp://\(ip):\(settings.rtspPort)\(settings.rtspPath)"
-
+        
         rtspServer = SimpleRTSPServer(
             port: UInt16(settings.rtspPort),
             path: settings.rtspPath,
             videoCodec: settings.videoCodec,
             audioEnabled: settings.audioEnabled
         )
-
+        
         rtspServer?.getSps = { [weak self] in self?.videoEncoder.sps }
         rtspServer?.getPps = { [weak self] in self?.videoEncoder.pps }
         rtspServer?.getVps = { [weak self] in self?.videoEncoder.vps }
-
+        
         rtspServer?.onClientChange = { [weak self] ip in
             DispatchQueue.main.async {
-                let wasConnected = self?.isClientConnected ?? false
                 self?.clientIp = ip
                 self?.isClientConnected = (ip != nil)
-                
-                // Trigger alert border when client disconnects
-                if wasConnected && ip == nil {
-                    self?.clientDisconnected = true
-                    // Auto-hide after 2 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        self?.clientDisconnected = false
-                    }
-                }
             }
         }
-
+        
         rtspServer?.onSessionPlay = { [weak self] clientHost, videoPort, audioPort, isTcp, connection, videoCh, audioCh in
             self?.startStreaming(
                 clientHost: clientHost,
@@ -141,28 +122,12 @@ class StreamManager: NSObject, ObservableObject {
                 audioCh: audioCh
             )
         }
-
+        
         rtspServer?.onSessionStop = { [weak self] in
             self?.stopStreaming()
         }
-
-        isServerRunning = true
-
-        // Configure audio session for background playback
-        configureAudioSession()
-
-        // Start camera and configure encoder immediately so SPS/PPS are available
-        // before any client connects (matches Android's approach)
-        cameraManager.configureSession(
-            width: settings.getWidth(),
-            height: settings.getHeight(),
-            fps: settings.fps,
-            audioEnabled: settings.audioEnabled
-        )
-        cameraManager.start()
-
-        // Configure encoder right away — frames will be encoded and SPS/PPS extracted
-        // even before a client connects. RTP sending is gated on videoSender != nil.
+        
+        // Configure and warm up encoders
         videoEncoder.configure(
             width: Int32(settings.getWidth()),
             height: Int32(settings.getHeight()),
@@ -171,70 +136,43 @@ class StreamManager: NSObject, ObservableObject {
             bitrateMbps: settings.bitrate,
             gop: settings.gop
         )
-
+        
         if settings.audioEnabled {
             audioEncoder.configure(
                 sampleRate: 44100.0,
                 channels: 1
             )
         }
-
-        // Start RTSP server after encoder is configured
+        
         rtspServer?.start()
-    }
-    
-    private func configureAudioSession() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            // Configure for background audio playback
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
-            try session.setActive(true)
-        } catch {
-            print("Failed to configure audio session: \(error)")
-        }
+        isServerRunning = true
+        
+        // Start camera preview session
+        cameraManager.configureSession(
+            width: settings.getWidth(),
+            height: settings.getHeight(),
+            fps: settings.fps,
+            audioEnabled: settings.audioEnabled
+        )
+        cameraManager.start()
     }
     
     func stopServer() {
         guard isServerRunning else { return }
-
+        
         rtspServer?.stop()
         rtspServer = nil
         isServerRunning = false
-
-        // Stop senders
-        videoSender?.stop()
-        videoSender = nil
-        audioSender?.stop()
-        audioSender = nil
-
-        // Stop frame readers
-        videoFrameReadTask?.cancel()
-        videoFrameReadTask = nil
-        audioFrameReadTask?.cancel()
-        audioFrameReadTask = nil
-
-        // Stop encoders (only when server fully stops, not on client disconnect)
+        
+        stopStreaming()
+        cameraManager.stop()
+        
         videoEncoder.stop()
         audioEncoder.stop()
-
-        // Clear frame providers
-        videoFrameProvider.clear()
-        audioFrameProvider.clear()
-
-        stopFpsMonitor()
-        cameraManager.stop()
-
+        
         streamUrl = ""
     }
     
-    private var videoFrameReadTask: DispatchWorkItem?
-    private var audioFrameReadTask: DispatchWorkItem?
-    
-    // ABR (Adaptive Bitrate) state
-    private var abrTargetBitrate: Int = 0
-    private var abrLastLossCheckTime: TimeInterval = 0
-    private var abrZeroLossDuration: TimeInterval = 0
-
     private func startStreaming(
         clientHost: String,
         videoPort: UInt16,
@@ -245,165 +183,56 @@ class StreamManager: NSObject, ObservableObject {
         audioCh: Int
     ) {
         let settings = SettingsManager.shared
-
+        
         DispatchQueue.main.async {
             self.transportMode = isTcp ? "TCP" : "UDP"
         }
-
-        // Clear stale frames from the queue to avoid initial latency
-        videoFrameProvider.clearFilledQueue()
-        audioFrameProvider.clear()
-
-        // Encoder is already configured and running from startServer().
-        // Force a keyframe so the client gets a clean starting point (SPS/PPS + IDR)
-        // regardless of where we are in the GOP.
-        videoEncoder.requestKeyframe()
-
-        // Reset frame provider keyframe request state
-        videoFrameProvider.resetDroppedFrameStats()
-
-        // Only create RTP senders for the connected client.
+        
+        sharedStreamState.reset()
+        
+        // Initialize senders
         videoSender = RTPSender(
             clientHost: clientHost,
             clientPort: videoPort,
+            localPort: isTcp ? nil : 50000,
             codec: settings.videoCodec,
             isTcp: isTcp,
             tcpConnection: connection,
             tcpChannel: videoCh,
             clockRate: 90000,
+            sharedState: sharedStreamState,
             getSps: { [weak self] in self?.videoEncoder.sps },
             getPps: { [weak self] in self?.videoEncoder.pps },
             getVps: { [weak self] in self?.videoEncoder.vps }
         )
         videoSender?.start()
         
-        // Set up ABR (Adaptive Bitrate) feedback
-        abrTargetBitrate = settings.bitrate * 1000 * 1000 // Convert Mbps to bps
-        abrLastLossCheckTime = CACurrentMediaTime()
-        abrZeroLossDuration = 0
-        setupABR()
-
-        // Start reading video frames from the frame provider and sending via RTP
-        startVideoFrameReader()
-
         if settings.audioEnabled {
             audioSender = RTPSender(
                 clientHost: clientHost,
                 clientPort: audioPort,
+                localPort: isTcp ? nil : 50002,
                 codec: "aac",
                 isTcp: isTcp,
                 tcpConnection: connection,
                 tcpChannel: audioCh,
-                clockRate: 44100
+                clockRate: 44100,
+                sharedState: sharedStreamState
             )
             audioSender?.start()
-            
-            // Start reading audio frames from the frame provider and sending via RTP
-            startAudioFrameReader()
         }
-
+        
         // Update FPS diagnostics
         startFpsMonitor()
     }
     
-    private func startVideoFrameReader() {
-        let task = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
-            while self.videoSender != nil {
-                if let frame = self.videoFrameProvider.getFrameBlocking(timeoutMs: 1000) {
-                    let data = Data(bytes: frame.buffer, count: frame.length)
-                    let timestampUs = frame.timestampUs
-                    let isKeyFrame = self.isKeyFrame(data: data)
-                    self.videoSender?.sendVideoFrame(data: data, timestampUs: timestampUs, isKeyFrame: isKeyFrame)
-                    self.videoFrameProvider.recycleFrame(frame)
-                }
-            }
-        }
-        videoFrameReadTask = task
-        DispatchQueue.global(qos: .userInitiated).async(execute: task)
-    }
-    
-    private func startAudioFrameReader() {
-        let task = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
-            while self.audioSender != nil {
-                if let frame = self.audioFrameProvider.getFrameBlocking(timeoutMs: 1000) {
-                    let data = Data(bytes: frame.buffer, count: frame.length)
-                    let timestampUs = frame.timestampUs
-                    self.audioSender?.sendAudioFrame(data: data, timestampUs: timestampUs)
-                    self.audioFrameProvider.recycleFrame(frame)
-                }
-            }
-        }
-        audioFrameReadTask = task
-        DispatchQueue.global(qos: .userInitiated).async(execute: task)
-    }
-    
-    private func setupABR() {
-        // Wire up RTCP feedback for ABR
-        // Note: This would need to be connected to the RTCP sender in a real implementation
-        // For now, we'll implement the ABR logic that can be called externally
-    }
-    
-    private func handlePacketLoss(fractionLost: UInt8) {
-        let now = CACurrentMediaTime()
-        let elapsed = now - abrLastLossCheckTime
-        abrLastLossCheckTime = now
-        
-        if fractionLost > 12 { // ~5% loss threshold
-            // Reduce bitrate to 75% of current
-            let newBitrate = max(abrTargetBitrate * 75 / 100, abrTargetBitrate / 5)
-            abrTargetBitrate = newBitrate
-            videoEncoder.updateDynamicBitrate(bps: newBitrate)
-            abrZeroLossDuration = 0
-        } else {
-            // No significant loss
-            abrZeroLossDuration += elapsed
-            if abrZeroLossDuration >= 30.0 {
-                // Increase bitrate by 10% after 30 seconds of zero loss
-                let maxBitrate = SettingsManager.shared.bitrate * 1000 * 1000
-                let newBitrate = min(abrTargetBitrate * 110 / 100 + 1, maxBitrate)
-                abrTargetBitrate = newBitrate
-                videoEncoder.updateDynamicBitrate(bps: newBitrate)
-                abrZeroLossDuration = 0
-            }
-        }
-    }
-    
-    private func isKeyFrame(data: Data) -> Bool {
-        // Check if the data contains an IDR NAL unit (H.264 type 5 or H.265 type 19/20)
-        var i = 0
-        while i < data.count - 4 {
-            if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
-                let nalType = data[i + 3] & 0x1F // H.264
-                if nalType == 5 { return true } // IDR
-                i += 3
-            } else if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1 {
-                let nalType = data[i + 4] & 0x1F // H.264
-                if nalType == 5 { return true } // IDR
-                i += 4
-            } else {
-                i += 1
-            }
-        }
-        return false
-    }
-    
     private func stopStreaming() {
-        // Only stop senders — keep encoder running so SPS/PPS remain available
-        // for the next client connection. Encoder is stopped in stopServer().
         videoSender?.stop()
         videoSender = nil
-
+        
         audioSender?.stop()
         audioSender = nil
-
-        // Stop frame readers
-        videoFrameReadTask?.cancel()
-        videoFrameReadTask = nil
-        audioFrameReadTask?.cancel()
-        audioFrameReadTask = nil
-
+        
         stopFpsMonitor()
     }
     
