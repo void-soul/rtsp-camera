@@ -39,9 +39,6 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             
-            // Set delegate for interruption handling
-            self.captureSession.delegate = self
-            
             self.captureSession.beginConfiguration()
             
             // Re-use or clear inputs
@@ -346,18 +343,13 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     
     // MARK: - White Balance
     
-    func setWhiteBalance(mode: AVCaptureDevice.WhiteBalanceMode, temperature: Float = 6500) {
+    func setWhiteBalance(mode: AVCaptureDevice.WhiteBalanceMode) {
         guard let input = videoDeviceInput else { return }
         let device = input.device
         
         do {
             try device.lockForConfiguration()
             device.whiteBalanceMode = mode
-            if mode == .temperature {
-                // Set color temperature (in Kelvin)
-                let temperatureAndTint = AVCaptureDevice.WhiteBalanceTemperatureAndTint(temperature: temperature, tint: 0)
-                device.setWhiteBalanceModeLocked(with: temperatureAndTint, completionHandler: nil)
-            }
             device.unlockForConfiguration()
             DispatchQueue.main.async { self.whiteBalanceMode = mode }
         } catch {
@@ -371,16 +363,16 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             setWhiteBalance(mode: .continuousAutoWhiteBalance)
             DispatchQueue.main.async { self.currentWBMode = "AUTO" }
         case "INCANDESCENT":
-            setWhiteBalance(mode: .temperature, temperature: 2800)
+            setWhiteBalance(mode: .tungsten)
             DispatchQueue.main.async { self.currentWBMode = "INCANDESCENT" }
         case "FLUORESCENT":
-            setWhiteBalance(mode: .temperature, temperature: 4000)
+            setWhiteBalance(mode: .fluorescent)
             DispatchQueue.main.async { self.currentWBMode = "FLUORESCENT" }
         case "DAYLIGHT":
-            setWhiteBalance(mode: .temperature, temperature: 5500)
+            setWhiteBalance(mode: .daylight)
             DispatchQueue.main.async { self.currentWBMode = "DAYLIGHT" }
         case "CLOUDY":
-            setWhiteBalance(mode: .temperature, temperature: 7500)
+            setWhiteBalance(mode: .cloudy)
             DispatchQueue.main.async { self.currentWBMode = "CLOUDY" }
         default:
             setWhiteBalance(mode: .continuousAutoWhiteBalance)
@@ -402,19 +394,15 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         
         do {
             try device.lockForConfiguration()
-            // iOS doesn't have direct effect modes like Android
-            // We'll use exposure and white balance adjustments as a basic approximation
             switch filter {
             case "B&W":
-                // Increase contrast for B&W effect
-                device.setExposureTargetBias(0, completionHandler: nil)
+                setWhiteBalance(mode: .tungsten)
             case "VIVID":
-                // Increase saturation (not directly available, use white balance shift)
                 break
             case "WARM":
-                setWhiteBalance(mode: .temperature, temperature: 7000)
+                setWhiteBalance(mode: .daylight)
             case "COOL":
-                setWhiteBalance(mode: .temperature, temperature: 4000)
+                setWhiteBalance(mode: .fluorescent)
             default:
                 break
             }
