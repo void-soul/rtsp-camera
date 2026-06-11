@@ -64,7 +64,7 @@ class H264Encoder {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse) // Low latency (No B-frames)
         
-        let profile = (codecType == kCMVideoCodecType_HEVC) ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_Baseline_AutoLevel
+        let profile = (codecType == kCMVideoCodecType_HEVC) ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_Main_AutoLevel
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: profile)
         
         adjustDynamicParameters(fps: fps, bitrateMbps: bitrateMbps, gop: gop)

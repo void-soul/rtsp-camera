@@ -18,7 +18,7 @@ class SettingsManager {
     }
     
     var bitrate: Int {
-        get { defaults.integer(forKey: "bitrate") == 0 ? 10 : defaults.integer(forKey: "bitrate") }
+        get { defaults.integer(forKey: "bitrate") == 0 ? 30 : defaults.integer(forKey: "bitrate") }
         set { defaults.set(newValue, forKey: "bitrate") } // in Mbps
     }
     
@@ -38,7 +38,7 @@ class SettingsManager {
     }
     
     var videoCodec: String {
-        get { defaults.string(forKey: "videoCodec") ?? "h265" }
+        get { defaults.string(forKey: "videoCodec") ?? "h264" }
         set { defaults.set(newValue, forKey: "videoCodec") }
     }
     

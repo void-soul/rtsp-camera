@@ -97,7 +97,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
                 if connection.isVideoStabilizationSupported {
                     connection.preferredVideoStabilizationMode = .auto
                 }
-                connection.videoOrientation = .portrait // Force portrait by default matching Android layout, or adjust dynamically
+                connection.videoOrientation = .landscapeRight // Match Android landscape layout
             }
             
             // Configure Audio Output
