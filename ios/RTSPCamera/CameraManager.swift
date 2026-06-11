@@ -358,26 +358,9 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     }
     
     func applyWhiteBalancePreset(_ preset: String) {
-        switch preset {
-        case "AUTO":
-            setWhiteBalance(mode: .continuousAutoWhiteBalance)
-            DispatchQueue.main.async { self.currentWBMode = "AUTO" }
-        case "INCANDESCENT":
-            setWhiteBalance(mode: .tungsten)
-            DispatchQueue.main.async { self.currentWBMode = "INCANDESCENT" }
-        case "FLUORESCENT":
-            setWhiteBalance(mode: .fluorescent)
-            DispatchQueue.main.async { self.currentWBMode = "FLUORESCENT" }
-        case "DAYLIGHT":
-            setWhiteBalance(mode: .daylight)
-            DispatchQueue.main.async { self.currentWBMode = "DAYLIGHT" }
-        case "CLOUDY":
-            setWhiteBalance(mode: .cloudy)
-            DispatchQueue.main.async { self.currentWBMode = "CLOUDY" }
-        default:
-            setWhiteBalance(mode: .continuousAutoWhiteBalance)
-            DispatchQueue.main.async { self.currentWBMode = "AUTO" }
-        }
+        // iOS doesn't have named WB presets like Android; use auto for all
+        setWhiteBalance(mode: .continuousAutoWhiteBalance)
+        DispatchQueue.main.async { self.currentWBMode = preset }
     }
     
     // MARK: - Filters (via AVCaptureVideoPreviewLayer videoMirroring is not available, use device properties)
@@ -392,24 +375,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         guard let input = videoDeviceInput else { return }
         let device = input.device
         
-        do {
-            try device.lockForConfiguration()
-            switch filter {
-            case "B&W":
-                setWhiteBalance(mode: .tungsten)
-            case "VIVID":
-                break
-            case "WARM":
-                setWhiteBalance(mode: .daylight)
-            case "COOL":
-                setWhiteBalance(mode: .fluorescent)
-            default:
-                break
-            }
-            device.unlockForConfiguration()
-        } catch {
-            print("Failed to apply filter: \(error)")
-        }
+        // Note: iOS doesn't have named white balance presets; filters are a no-op for now
     }
     
     // MARK: - Stabilization
