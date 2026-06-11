@@ -35,7 +35,7 @@ class RTCPSender {
         guard let connection = connection else { return }
         isRunning = true
         
-        let clientHostDesc = connection.endpoint.description
+        let clientHostDesc = String(describing: connection.endpoint)
         connection.stateUpdateHandler = { state in
             switch state {
             case .ready:
