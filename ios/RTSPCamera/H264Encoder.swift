@@ -19,6 +19,13 @@ class H264Encoder {
     private var frameCount: Int = 0
     private var lastFpsTimestamp: TimeInterval = 0
     private(set) var currentFps: Double = 0.0
+
+    // Keyframe request flag (set when client connects to ensure first frame is a keyframe)
+    private var forceKeyframe: Bool = false
+
+    func requestKeyframe() {
+        forceKeyframe = true
+    }
     
     func setCallback(_ callback: @escaping (Data, Bool, Int64) -> Void) {
         self.callback = callback
@@ -87,16 +94,24 @@ class H264Encoder {
     
     func encode(pixelBuffer: CVPixelBuffer, timestampUs: Int64) {
         guard let session = session else { return }
-        
+
         let presentationTimeStamp = CMTime(value: timestampUs, timescale: 1000000)
         let duration = CMTime(value: 1, timescale: 30) // dummy
-        
+
+        // If a keyframe was requested (e.g. client just connected), force the next frame to be a keyframe
+        var frameProperties: CFDictionary? = nil
+        if forceKeyframe {
+            forceKeyframe = false
+            let props: [CFString: Any] = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue]
+            frameProperties = props as CFDictionary
+        }
+
         let status = VTCompressionSessionEncodeFrame(
             session,
             imageBuffer: pixelBuffer,
             presentationTimeStamp: presentationTimeStamp,
             duration: duration,
-            frameProperties: nil,
+            frameProperties: frameProperties,
             sourceFrameRefcon: nil,
             infoFlagsOut: nil
         )

@@ -182,6 +182,10 @@ class StreamManager: NSObject, ObservableObject {
         }
 
         // Encoder is already configured and running from startServer().
+        // Force a keyframe so the client gets a clean starting point (SPS/PPS + IDR)
+        // regardless of where we are in the GOP.
+        videoEncoder.requestKeyframe()
+
         // Only create RTP senders for the connected client.
         videoSender = RTPSender(
             clientHost: clientHost,
