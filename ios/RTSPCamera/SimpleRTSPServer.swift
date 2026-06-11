@@ -1,11 +1,24 @@
 import Foundation
 import Network
 
+fileprivate func hostToString(_ host: NWEndpoint.Host) -> String {
+    switch host {
+    case .name(let name, _):
+        return name
+    case .ipv4(let address):
+        return "\(address)"
+    case .ipv6(let address):
+        return "\(address)"
+    @unknown default:
+        return String(describing: host)
+    }
+}
+
 class SimpleRTSPServer {
-    private let port: UInt16
-    private let path: String
-    private let videoCodec: String
-    private let audioEnabled: Bool
+    fileprivate let port: UInt16
+    fileprivate let path: String
+    fileprivate let videoCodec: String
+    fileprivate let audioEnabled: Bool
     
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "com.gld.rtsp_camera.rtspServerQueue")
@@ -110,7 +123,7 @@ class SimpleRTSPServer {
     private func getIPAddress(from endpoint: NWEndpoint) -> String? {
         switch endpoint {
         case .hostPort(let host, _):
-            return host.description
+            return hostToString(host)
         default:
             return nil
         }
@@ -380,7 +393,7 @@ private class RTSPSession {
     private func getClientIp() -> String {
         switch connection.endpoint {
         case .hostPort(let host, _):
-            return host.description
+            return hostToString(host)
         default:
             return "127.0.0.1"
         }

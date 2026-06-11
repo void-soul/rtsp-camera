@@ -51,7 +51,7 @@ class AudioEncoder {
         dstFormat = AudioStreamBasicDescription(
             mSampleRate: sampleRate,
             mFormatID: kAudioFormatMPEG4AAC,
-            mFormatFlags: UInt32(MPEG4ObjectType.AAC_LC.rawValue),
+            mFormatFlags: 0,
             mBytesPerPacket: 0,
             mFramesPerPacket: 1024,
             mBytesPerFrame: 0,
@@ -77,7 +77,7 @@ class AudioEncoder {
     
     func encode(sampleBuffer: CMSampleBuffer) {
         lock.lock()
-        guard let converter = audioConverter else {
+        guard audioConverter != nil else {
             lock.unlock()
             return
         }
@@ -103,11 +103,9 @@ class AudioEncoder {
         
         let timestampUs = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).value
         
-        let buffers = UnsafeBufferPointer<AudioBuffer>(start: &audioBufferList.mBuffers, count: Int(audioBufferList.mNumberBuffers))
-        for buffer in buffers {
-            if let mData = buffer.mData {
-                pcmBuffer.append(Data(bytes: mData, count: Int(buffer.mDataByteSize)))
-            }
+        let buffer = audioBufferList.mBuffers
+        if let mData = buffer.mData {
+            pcmBuffer.append(Data(bytes: mData, count: Int(buffer.mDataByteSize)))
         }
         
         let bytesPerFrame = srcFormat?.mBytesPerFrame ?? 2

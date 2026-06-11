@@ -244,7 +244,6 @@ class RTPSender {
                     let nalSize = end - start
                     
                     if nalSize > 0 {
-                        let nalType = self.getNalType(data: data, offset: start)
                         let isLastNALU = (end == length)
                         
                         if nalSize <= self.maxPacketSize {
@@ -289,7 +288,7 @@ class RTPSender {
             rtpBuffer[rtpHeaderSize + 2] = UInt8((auHeader >> 8) & 0xFF)
             rtpBuffer[rtpHeaderSize + 3] = UInt8(auHeader & 0xFF)
             
-            rtpBuffer[rtpHeaderSize + auHeaderSize...] = data
+            rtpBuffer.replaceSubrange((rtpHeaderSize + auHeaderSize)..<totalLen, with: data)
             
             self.sendPacket(data: rtpBuffer)
             self.rtcpSender?.updateRtpTimestamp(self.timestamp)
