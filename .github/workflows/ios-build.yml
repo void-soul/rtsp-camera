@@ -30,7 +30,13 @@ jobs:
             -scheme RTSPCamera \
             -sdk iphonesimulator \
             -configuration Debug \
-            build
+            build > /tmp/build.log 2>&1 || {
+              echo "=== BUILD ERRORS ==="
+              grep -E "\.swift:[0-9]+:[0-9]+: error:" /tmp/build.log || grep -E "error:" /tmp/build.log
+              echo "=== LAST 40 LINES ==="
+              tail -40 /tmp/build.log
+              exit 1
+            }
 
       - name: Build for Device (Unsigned Release)
         run: |
