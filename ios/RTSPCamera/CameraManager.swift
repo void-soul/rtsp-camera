@@ -2,7 +2,7 @@ import Foundation
 import AVFoundation
 import UIKit
 
-class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate, AVCaptureSessionDelegate {
+class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     @Published var isRunning = false
     @Published var activeCameraPosition: AVCaptureDevice.Position = .back
     @Published var zoomFactor: CGFloat = 1.0
@@ -10,7 +10,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     @Published var isTorchOn = false
     @Published var focusMode: AVCaptureDevice.FocusMode = .continuousAutoFocus
     @Published var lensPosition: Float = 0.0 // For manual focus slider (0.0 to 1.0)
-    @Published var whiteBalanceMode: AVCaptureDevice.WhiteBalanceMode = .auto
+    @Published var whiteBalanceMode: AVCaptureDevice.WhiteBalanceMode = .continuousAutoWhiteBalance
     @Published var currentWBMode: String = "AUTO"
     @Published var currentFilter: String = "None"
     @Published var isOISEnabled = true
@@ -32,6 +32,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     
     override init() {
         super.init()
+        setupInterruptionNotifications()
     }
     
     func configureSession(width: Int, height: Int, fps: Int, audioEnabled: Bool) {
@@ -367,7 +368,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     func applyWhiteBalancePreset(_ preset: String) {
         switch preset {
         case "AUTO":
-            setWhiteBalance(mode: .auto)
+            setWhiteBalance(mode: .continuousAutoWhiteBalance)
             DispatchQueue.main.async { self.currentWBMode = "AUTO" }
         case "INCANDESCENT":
             setWhiteBalance(mode: .temperature, temperature: 2800)
@@ -382,7 +383,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             setWhiteBalance(mode: .temperature, temperature: 7500)
             DispatchQueue.main.async { self.currentWBMode = "CLOUDY" }
         default:
-            setWhiteBalance(mode: .auto)
+            setWhiteBalance(mode: .continuousAutoWhiteBalance)
             DispatchQueue.main.async { self.currentWBMode = "AUTO" }
         }
     }
@@ -453,43 +454,44 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         }
     }
     
-    // MARK: - AVCaptureSessionDelegate (Interruption Handling)
+    // MARK: - Session Interruption Handling (Notification-based, iOS 15 compatible)
     
-    func sessionWasInterrupted(_ session: AVCaptureSession, with reason: AVCaptureSession.InterruptionReason) {
-        print("Session was interrupted with reason: \(reason.rawValue)")
+    func setupInterruptionNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(sessionWasInterrupted(_:)),
+            name: .AVCaptureSessionWasInterrupted,
+            object: captureSession
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(sessionInterruptionEnded(_:)),
+            name: .AVCaptureSessionInterruptionEnded,
+            object: captureSession
+        )
+    }
+    
+    @objc private func sessionWasInterrupted(_ notification: Notification) {
+        print("Session was interrupted")
         
         DispatchQueue.main.async {
             self.isRunning = false
-            
-            // Handle different interruption reasons
-            switch reason {
-            case .audioDeviceInUseByAnotherClient:
-                print("Audio device in use by another client")
-            case .videoDeviceInUseByAnotherClient:
-                print("Video device in use by another client")
-            case .videoDeviceNotAvailableWithMultipleForegroundApps:
-                print("Video device not available with multiple foreground apps")
-            @unknown default:
-                print("Unknown interruption reason")
-            }
         }
     }
     
-    func sessionInterruptionEnded(_ session: AVCaptureSession) {
+    @objc private func sessionInterruptionEnded(_ notification: Notification) {
         print("Session interruption ended")
         
-        // Restart the session
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             
-            if !session.isRunning {
-                session.startRunning()
+            if !self.captureSession.isRunning {
+                self.captureSession.startRunning()
                 DispatchQueue.main.async {
                     self.isRunning = true
                 }
             }
             
-            // Reapply camera configuration
             let settings = SettingsManager.shared
             self.configureSession(
                 width: settings.getWidth(),
