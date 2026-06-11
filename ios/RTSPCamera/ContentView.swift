@@ -87,7 +87,6 @@ struct ParamMenu: View {
                 }
             }
             .frame(minWidth: 120)
-            .presentationCompactAdaptation(.popover)
         }
     }
 
@@ -278,7 +277,7 @@ struct ContentView: View {
             // Left: inline parameter labels
             ParamMenu(title: "RES", options: resolutions, selection: $resolution,
                       disabled: streamManager.isClientConnected) { val in
-                saveSetting(\.resolution, val)
+                SettingsManager.shared.resolution = val
             }
             VerticalDivider()
             ParamMenu(title: "BITRATE", options: bitrates.map { "\($0) Mbps" },
@@ -286,16 +285,16 @@ struct ContentView: View {
                         get: { "\(bitrate) Mbps" },
                         set: { bitrate = $0.replacingOccurrences(of: " Mbps", with: "") }
                       )) { val in
-                saveSetting(\.bitrate, Int(val.replacingOccurrences(of: " Mbps", with: "")) ?? 30)
+                SettingsManager.shared.bitrate = Int(val.replacingOccurrences(of: " Mbps", with: "")) ?? 30
             }
             VerticalDivider()
             ParamMenu(title: "FPS", options: fpsList, selection: $fps,
                       isActive: true) { val in
-                saveSetting(\.fps, Int(val) ?? 30)
+                SettingsManager.shared.fps = Int(val) ?? 30
             }
             VerticalDivider()
             ParamMenu(title: "GOP", options: gopList, selection: $gop) { val in
-                saveSetting(\.gop, Int(val) ?? 60)
+                SettingsManager.shared.gop = Int(val) ?? 60
             }
             VerticalDivider()
             ParamMenu(title: "CODEC", options: codecs.map { $0.uppercased() },
@@ -304,7 +303,7 @@ struct ContentView: View {
                         set: { codec = $0.lowercased() }
                       ),
                       disabled: streamManager.isServerRunning) { val in
-                saveSetting(\.videoCodec, val.lowercased())
+                SettingsManager.shared.videoCodec = val.lowercased()
             }
 
             Spacer(minLength: 8)
@@ -603,7 +602,4 @@ struct ContentView: View {
         streamManager.startServer()
     }
 
-    private func saveSetting<T>(_ keyPath: WritableKeyPath<SettingsManager, T>, _ value: T) {
-        SettingsManager.shared[keyPath: keyPath] = value
-    }
 }
