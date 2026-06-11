@@ -1,19 +1,6 @@
 import Foundation
 import Network
 
-fileprivate func hostToString(_ host: NWEndpoint.Host) -> String {
-    switch host {
-    case .name(let name, _):
-        return name
-    case .ipv4(let address):
-        return "\(address)"
-    case .ipv6(let address):
-        return "\(address)"
-    @unknown default:
-        return String(describing: host)
-    }
-}
-
 class SimpleRTSPServer {
     fileprivate let port: UInt16
     fileprivate let path: String
@@ -49,9 +36,6 @@ class SimpleRTSPServer {
         
         do {
             let parameters = NWParameters.tcp
-            if let tcpOptions = parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
-                tcpOptions.noDelay = true
-            }
             listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: port))
             
             listener?.newConnectionHandler = { [weak self] connection in
@@ -123,7 +107,7 @@ class SimpleRTSPServer {
     private func getIPAddress(from endpoint: NWEndpoint) -> String? {
         switch endpoint {
         case .hostPort(let host, _):
-            return hostToString(host)
+            return String(describing: host)
         default:
             return nil
         }
@@ -190,46 +174,25 @@ private class RTSPSession {
     }
     
     private func processBuffer() {
-        while !requestBuffer.isEmpty {
-            if requestBuffer[0] == 0x24 { // '$'
-                guard requestBuffer.count >= 4 else { return }
-                let length = (Int(requestBuffer[2]) << 8) | Int(requestBuffer[3])
-                guard requestBuffer.count >= 4 + length else { return }
-                requestBuffer.removeSubrange(0..<(4 + length)) // Discard client RTCP interleaved packets
-            } else {
-                let delimiter = Data([0x0D, 0x0A, 0x0D, 0x0A])
-                guard let range = requestBuffer.range(of: delimiter) else { return }
-                
-                let requestData = requestBuffer.subdata(in: 0..<range.upperBound)
-                requestBuffer.removeSubrange(0..<range.upperBound)
-                
-                if let requestString = String(data: requestData, encoding: .utf8) {
-                    let (response, isPlayRequest) = processRequest(requestString)
-                    connection.send(content: response.data(using: .utf8), completion: .contentProcessed({ [weak self] _ in
-                        guard let self = self else { return }
-                        if isPlayRequest {
-                            self.triggerSessionPlay()
-                        }
-                    }))
-                }
-            }
+        // Look for end of headers marker \r\n\r\n (0x0D 0x0A 0x0D 0x0A)
+        let delimiter = Data([0x0D, 0x0A, 0x0D, 0x0A])
+        guard let range = requestBuffer.range(of: delimiter) else { return }
+        
+        let requestData = requestBuffer.subdata(in: 0..<range.upperBound)
+        requestBuffer.removeSubrange(0..<range.upperBound)
+        
+        if let requestString = String(data: requestData, encoding: .utf8) {
+            let response = processRequest(requestString)
+            connection.send(content: response.data(using: .utf8), completion: .contentProcessed({ _ in }))
         }
     }
     
-    private func triggerSessionPlay() {
-        if !isPlaying {
-            isPlaying = true
-            let clientIp = getClientIp()
-            server?.onSessionPlay?(clientIp, clientVideoPort, clientAudioPort, useTcp, connection, videoTcpChannel, audioTcpChannel)
-        }
-    }
-    
-    private func processRequest(_ request: String) -> (String, Bool) {
+    private func processRequest(_ request: String) -> String {
         let lines = request.components(separatedBy: "\r\n")
-        guard let firstLine = lines.first else { return (buildResponse("400 Bad Request", ""), false) }
+        guard let firstLine = lines.first else { return buildResponse("400 Bad Request", "") }
         
         let parts = firstLine.components(separatedBy: " ")
-        guard parts.count >= 3 else { return (buildResponse("400 Bad Request", ""), false) }
+        guard parts.count >= 3 else { return buildResponse("400 Bad Request", "") }
         
         let method = parts[0]
         let url = parts[1]
@@ -246,15 +209,15 @@ private class RTSPSession {
         
         switch method {
         case "OPTIONS":
-            return (buildResponse("200 OK", "Public: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN, GET_PARAMETER"), false)
+            return buildResponse("200 OK", "Public: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN, GET_PARAMETER")
             
         case "DESCRIBE":
             let sdp = buildSDP()
-            return (buildResponse(
+            return buildResponse(
                 "200 OK",
                 "Content-Type: application/sdp\r\nContent-Length: \(sdp.utf8.count)",
                 sdp
-            ), false)
+            )
             
         case "SETUP":
             var transportHeader = ""
@@ -305,20 +268,25 @@ private class RTSPSession {
                 let serverPortRange = url.contains("track0") ? "50000-50001" : "50002-50003"
                 transportResp = "Transport: RTP/AVP;unicast;client_port=\(clientPort)-\(clientPort+1);server_port=\(serverPortRange)\r\nSession: \(rtspSessionId)"
             }
-            return (buildResponse("200 OK", transportResp), false)
+            return buildResponse("200 OK", transportResp)
             
         case "PLAY":
-            return (buildResponse("200 OK", "Session: \(rtspSessionId)"), true)
+            if !isPlaying {
+                isPlaying = true
+                let clientIp = getClientIp()
+                server?.onSessionPlay?(clientIp, clientVideoPort, clientAudioPort, useTcp, connection, videoTcpChannel, audioTcpChannel)
+            }
+            return buildResponse("200 OK", "Session: \(rtspSessionId)")
             
         case "TEARDOWN":
             handleDisconnect()
-            return (buildResponse("200 OK", "Session: \(rtspSessionId)"), false)
+            return buildResponse("200 OK", "Session: \(rtspSessionId)")
             
         case "GET_PARAMETER", "SET_PARAMETER":
-            return (buildResponse("200 OK", "Session: \(rtspSessionId)"), false)
+            return buildResponse("200 OK", "Session: \(rtspSessionId)")
             
         default:
-            return (buildResponse("200 OK", "Session: \(rtspSessionId)"), false)
+            return buildResponse("200 OK", "Session: \(rtspSessionId)")
         }
     }
     
@@ -393,7 +361,7 @@ private class RTSPSession {
     private func getClientIp() -> String {
         switch connection.endpoint {
         case .hostPort(let host, _):
-            return hostToString(host)
+            return String(describing: host)
         default:
             return "127.0.0.1"
         }

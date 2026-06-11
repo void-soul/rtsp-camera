@@ -6,10 +6,9 @@ class AudioEncoder {
     private var audioConverter: AudioConverterRef?
     private var pcmBuffer = Data()
     private var callback: ((Data, Int64) -> Void)?
-    private let lock = NSLock()
     
-    private var srcFormat: AudioStreamBasicDescription?
-    private var dstFormat: AudioStreamBasicDescription?
+    private var srcFormat = AudioStreamBasicDescription()
+    private var dstFormat = AudioStreamBasicDescription()
     
     private let outBufferMaxSizeBytes: UInt32 = 1024 * 8
     private var outBuffer: UnsafeMutablePointer<UInt8>
@@ -24,15 +23,11 @@ class AudioEncoder {
     }
     
     func setCallback(_ callback: @escaping (Data, Int64) -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
         self.callback = callback
     }
     
     func configure(sampleRate: Double, channels: UInt32) {
-        lock.lock()
-        defer { lock.unlock() }
-        stopLocked()
+        stop()
         
         // Setup source format (PCM from AVCaptureAudioDataOutput)
         srcFormat = AudioStreamBasicDescription(
@@ -51,7 +46,7 @@ class AudioEncoder {
         dstFormat = AudioStreamBasicDescription(
             mSampleRate: sampleRate,
             mFormatID: kAudioFormatMPEG4AAC,
-            mFormatFlags: 0,
+            mFormatFlags: UInt32(MPEG4ObjectID.AAC_LC.rawValue),
             mBytesPerPacket: 0,
             mFramesPerPacket: 1024,
             mBytesPerFrame: 0,
@@ -60,7 +55,7 @@ class AudioEncoder {
             mReserved: 0
         )
         
-        var status = AudioConverterNew(&srcFormat!, &dstFormat!, &audioConverter)
+        var status = AudioConverterNew(&srcFormat, &dstFormat, &audioConverter)
         guard status == noErr, let converter = audioConverter else {
             print("AudioConverterNew failed: \(status)")
             return
@@ -76,11 +71,7 @@ class AudioEncoder {
     }
     
     func encode(sampleBuffer: CMSampleBuffer) {
-        lock.lock()
-        guard audioConverter != nil else {
-            lock.unlock()
-            return
-        }
+        guard let converter = audioConverter else { return }
         
         var blockBuffer: CMBlockBuffer?
         var audioBufferList = AudioBufferList()
@@ -96,23 +87,21 @@ class AudioEncoder {
             blockBufferOut: &blockBuffer
         )
         
-        guard status == noErr else {
-            lock.unlock()
-            return
+        guard status == noErr else { return }
+        
+        let timestampUs = Int64(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) * 1_000_000)
+        
+        let buffers = UnsafeBufferPointer<AudioBuffer>(start: &audioBufferList.mBuffers, count: Int(audioBufferList.mNumberBuffers))
+        for buffer in buffers {
+            if let mData = buffer.mData {
+                pcmBuffer.append(Data(bytes: mData, count: Int(buffer.mDataByteSize)))
+            }
         }
         
-        let timestampUs = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).value
-        
-        let buffer = audioBufferList.mBuffers
-        if let mData = buffer.mData {
-            pcmBuffer.append(Data(bytes: mData, count: Int(buffer.mDataByteSize)))
-        }
-        
-        let bytesPerFrame = srcFormat?.mBytesPerFrame ?? 2
+        let bytesPerFrame = srcFormat.mBytesPerFrame
         let bytesNeeded = 1024 * Int(bytesPerFrame)
         
         while pcmBuffer.count >= bytesNeeded {
-            guard let activeConverter = audioConverter else { break }
             var chunk = pcmBuffer.prefix(bytesNeeded)
             pcmBuffer.removeFirst(bytesNeeded)
             
@@ -128,12 +117,12 @@ class AudioEncoder {
                 var ioOutputDataPacketSize: UInt32 = 1
                 var outAudioBufferList = AudioBufferList()
                 outAudioBufferList.mNumberBuffers = 1
-                outAudioBufferList.mBuffers.mNumberChannels = dstFormat?.mChannelsPerFrame ?? 1
+                outAudioBufferList.mBuffers.mNumberChannels = dstFormat.mChannelsPerFrame
                 outAudioBufferList.mBuffers.mDataByteSize = outBufferMaxSizeBytes
                 outAudioBufferList.mBuffers.mData = UnsafeMutableRawPointer(outBuffer)
                 
                 let encodeStatus = AudioConverterFillComplexBuffer(
-                    activeConverter,
+                    converter,
                     inputDataProc,
                     &context,
                     &ioOutputDataPacketSize,
@@ -141,31 +130,15 @@ class AudioEncoder {
                     nil
                 )
                 
-                var aacData: Data? = nil
                 if encodeStatus == noErr && ioOutputDataPacketSize > 0 {
-                    aacData = Data(bytes: outBuffer, count: Int(outAudioBufferList.mBuffers.mDataByteSize))
+                    let aacData = Data(bytes: outBuffer, count: Int(outAudioBufferList.mBuffers.mDataByteSize))
+                    callback?(aacData, timestampUs)
                 }
-                
-                let cb = callback
-                lock.unlock()
-                
-                if let aac = aacData {
-                    cb?(aac, timestampUs)
-                }
-                
-                lock.lock()
             }
         }
-        lock.unlock()
     }
     
     func stop() {
-        lock.lock()
-        defer { lock.unlock() }
-        stopLocked()
-    }
-    
-    private func stopLocked() {
         if let converter = audioConverter {
             AudioConverterDispose(converter)
             audioConverter = nil
