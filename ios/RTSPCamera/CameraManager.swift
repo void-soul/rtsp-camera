@@ -39,85 +39,140 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             
+            print("[Camera] Configuring session with resolution: \(width)x\(height), FPS: \(fps), Audio: \(audioEnabled)")
+            
             self.captureSession.beginConfiguration()
             
-            // Re-use or clear inputs
-            if let videoInput = self.videoDeviceInput {
-                self.captureSession.removeInput(videoInput)
-            }
-            if let audioInput = self.audioDeviceInput {
-                self.captureSession.removeInput(audioInput)
-            }
+            // Turn off automatic audio configuration so we can configure it ourselves
+            self.captureSession.automaticallyConfiguresApplicationAudioSession = false
             
-            // Set preset: we try to match requested resolution
+            // Set session preset (resolution)
             self.setSessionPreset(width: width, height: height)
             
-            // Add Video Input
+            // Find appropriate video device
             guard let videoDevice = self.findVideoDevice(for: self.activeCameraPosition) else {
-                print("Could not find video device")
+                print("[Camera] Could not find video device for position \(self.activeCameraPosition)")
                 self.captureSession.commitConfiguration()
                 return
             }
             
-            do {
-                let videoInput = try AVCaptureDeviceInput(device: videoDevice)
-                if self.captureSession.canAddInput(videoInput) {
-                    self.captureSession.addInput(videoInput)
-                    self.videoDeviceInput = videoInput
+            // Configure video input (reuse if possible)
+            var shouldAddVideoInput = true
+            if let currentInput = self.videoDeviceInput {
+                if currentInput.device == videoDevice {
+                    shouldAddVideoInput = false
+                    print("[Camera] Reusing existing video input")
+                } else {
+                    self.captureSession.removeInput(currentInput)
+                    self.videoDeviceInput = nil
                 }
-            } catch {
-                print("Could not create video input: \(error)")
             }
             
-            // Set Frame Rate (FPS) — must match resolution to avoid overriding session preset
+            if shouldAddVideoInput {
+                do {
+                    let videoInput = try AVCaptureDeviceInput(device: videoDevice)
+                    if self.captureSession.canAddInput(videoInput) {
+                        self.captureSession.addInput(videoInput)
+                        self.videoDeviceInput = videoInput
+                        print("[Camera] Added video input successfully")
+                    } else {
+                        print("[Camera] Failed to add video input")
+                    }
+                } catch {
+                    print("[Camera] Could not create video input: \(error)")
+                }
+            }
+            
+            // Configure FPS
             self.configureFPS(device: videoDevice, targetWidth: width, targetHeight: height, fps: fps)
             
-            // Add Audio Input if enabled
+            // Configure audio input (reuse or add if enabled)
             if audioEnabled {
-                if let audioDevice = AVCaptureDevice.default(for: .audio) {
-                    do {
-                        let audioInput = try AVCaptureDeviceInput(device: audioDevice)
-                        if self.captureSession.canAddInput(audioInput) {
-                            self.captureSession.addInput(audioInput)
-                            self.audioDeviceInput = audioInput
+                var shouldAddAudioInput = true
+                if let currentAudioInput = self.audioDeviceInput {
+                    shouldAddAudioInput = false
+                    print("[Camera] Reusing existing audio input")
+                }
+                
+                if shouldAddAudioInput {
+                    if let audioDevice = AVCaptureDevice.default(for: .audio) {
+                        do {
+                            let audioInput = try AVCaptureDeviceInput(device: audioDevice)
+                            if self.captureSession.canAddInput(audioInput) {
+                                self.captureSession.addInput(audioInput)
+                                self.audioDeviceInput = audioInput
+                                print("[Camera] Added audio input successfully")
+                            } else {
+                                print("[Camera] Failed to add audio input")
+                            }
+                        } catch {
+                            print("[Camera] Could not create audio input: \(error)")
                         }
-                    } catch {
-                        print("Could not create audio input: \(error)")
                     }
                 }
-            }
-            
-            // Configure Video Output
-            self.captureSession.removeOutput(self.videoOutput)
-            self.videoOutput.alwaysDiscardsLateVideoFrames = true
-            self.videoOutput.setSampleBufferDelegate(self, queue: self.videoDataQueue)
-            self.videoOutput.videoSettings = [
-                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) // NV12 matching Android
-            ]
-            if self.captureSession.canAddOutput(self.videoOutput) {
-                self.captureSession.addOutput(self.videoOutput)
-            }
-            
-            // Configure stabilization (OIS/EIS) & Orientation
-            if let connection = self.videoOutput.connection(with: .video) {
-                if connection.isVideoStabilizationSupported {
-                    connection.preferredVideoStabilizationMode = .auto
+            } else {
+                // Remove audio input if disabled
+                if let currentAudioInput = self.audioDeviceInput {
+                    self.captureSession.removeInput(currentAudioInput)
+                    self.audioDeviceInput = nil
+                    print("[Camera] Removed audio input as audio is disabled")
                 }
-                connection.videoOrientation = .landscapeRight // Match Android landscape layout
             }
             
-            // Configure Audio Output
-            self.captureSession.removeOutput(self.audioOutput)
+            // Configure video output (reuse if already added)
+            if !self.captureSession.outputs.contains(self.videoOutput) {
+                self.videoOutput.alwaysDiscardsLateVideoFrames = true
+                self.videoOutput.setSampleBufferDelegate(self, queue: self.videoDataQueue)
+                self.videoOutput.videoSettings = [
+                    kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) // NV12
+                ]
+                if self.captureSession.canAddOutput(self.videoOutput) {
+                    self.captureSession.addOutput(self.videoOutput)
+                    print("[Camera] Added video output successfully")
+                } else {
+                    print("[Camera] Failed to add video output")
+                }
+            } else {
+                print("[Camera] Reusing existing video output")
+            }
+            
+            // Configure audio output
             if audioEnabled {
-                self.audioOutput.setSampleBufferDelegate(self, queue: self.audioDataQueue)
-                if self.captureSession.canAddOutput(self.audioOutput) {
-                    self.captureSession.addOutput(self.audioOutput)
+                if !self.captureSession.outputs.contains(self.audioOutput) {
+                    self.audioOutput.setSampleBufferDelegate(self, queue: self.audioDataQueue)
+                    if self.captureSession.canAddOutput(self.audioOutput) {
+                        self.captureSession.addOutput(self.audioOutput)
+                        print("[Camera] Added audio output successfully")
+                    } else {
+                        print("[Camera] Failed to add audio output")
+                    }
+                } else {
+                    print("[Camera] Reusing existing audio output")
+                }
+            } else {
+                if self.captureSession.outputs.contains(self.audioOutput) {
+                    self.captureSession.removeOutput(self.audioOutput)
+                    print("[Camera] Removed audio output as audio is disabled")
                 }
             }
             
             self.captureSession.commitConfiguration()
             
-            // Reset state trackers
+            // Configure connection properties AFTER committing configuration
+            if let connection = self.videoOutput.connection(with: .video) {
+                if connection.isVideoOrientationSupported {
+                    connection.videoOrientation = .landscapeRight
+                    print("[Camera] Connection videoOrientation set to landscapeRight")
+                }
+                if connection.isVideoStabilizationSupported {
+                    connection.preferredVideoStabilizationMode = .auto
+                    print("[Camera] Connection preferredVideoStabilizationMode set to auto")
+                }
+            } else {
+                print("[Camera] Warning: video connection not found after commitConfiguration")
+            }
+            
+            // Reset state trackers on main thread
             DispatchQueue.main.async {
                 self.zoomFactor = 1.0
                 self.exposureBias = 0.0
@@ -164,76 +219,62 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
 
-            let targetPixels = targetWidth * targetHeight
-
-            // Pass 1: Find format matching both resolution and FPS
-            var bestFormat: AVCaptureDevice.Format?
-            var bestPixelDiff = Int.max
-
-            for format in device.formats {
-                // Check FPS support
-                let supportsFps = format.videoSupportedFrameRateRanges.contains {
-                    $0.minFrameRate <= Double(fps) && $0.maxFrameRate >= Double(fps)
-                }
-                guard supportsFps else { continue }
-
-                // Check resolution match
-                let desc = format.formatDescription
-                let dims = CMVideoFormatDescriptionGetDimensions(desc)
-                let w = Int(dims.width)
-                let h = Int(dims.height)
-
-                // Only consider formats with same aspect ratio (16:9 for our presets)
-                let isLandscape = w >= h
-                let fw = isLandscape ? w : h
-                let fh = isLandscape ? h : w
-                let tw = max(targetWidth, targetHeight)
-                let th = min(targetWidth, targetHeight)
-
-                guard fw >= tw && fh >= th else { continue }
-
-                let diff = (fw * fh) - targetPixels
-                if diff < bestPixelDiff {
-                    bestPixelDiff = diff
-                    bestFormat = format
-                }
+            let targetFps = Double(fps)
+            let currentFormat = device.activeFormat
+            
+            // Check if current format supports target FPS
+            let currentSupportsFps = currentFormat.videoSupportedFrameRateRanges.contains {
+                $0.minFrameRate <= targetFps && $0.maxFrameRate >= targetFps
             }
-
-            // Pass 2: If no format matches both, find format matching resolution only
-            if bestFormat == nil {
-                bestPixelDiff = Int.max
+            
+            if currentSupportsFps {
+                // We can just keep the current format!
+                print("[Camera] Current active format supports target FPS \(fps). Keeping it.")
+            } else {
+                // Find a format that supports the target FPS and matches the aspect ratio/resolution
+                print("[Camera] Current format does not support FPS \(fps). Searching for compatible format...")
+                var bestFormat: AVCaptureDevice.Format?
+                var bestPixelDiff = Int.max
+                let targetPixels = targetWidth * targetHeight
+                
                 for format in device.formats {
+                    let supportsFps = format.videoSupportedFrameRateRanges.contains {
+                        $0.minFrameRate <= targetFps && $0.maxFrameRate >= targetFps
+                    }
+                    guard supportsFps else { continue }
+                    
                     let desc = format.formatDescription
                     let dims = CMVideoFormatDescriptionGetDimensions(desc)
                     let w = Int(dims.width)
                     let h = Int(dims.height)
-
+                    
+                    // Aspect ratio check (16:9)
                     let isLandscape = w >= h
                     let fw = isLandscape ? w : h
                     let fh = isLandscape ? h : w
                     let tw = max(targetWidth, targetHeight)
                     let th = min(targetWidth, targetHeight)
-
+                    
                     guard fw >= tw && fh >= th else { continue }
-
+                    
                     let diff = (fw * fh) - targetPixels
                     if diff < bestPixelDiff {
                         bestPixelDiff = diff
                         bestFormat = format
                     }
                 }
+                
+                if let newFormat = bestFormat {
+                    print("[Camera] Found better format: \(newFormat.formatDescription)")
+                    device.activeFormat = newFormat
+                } else {
+                    print("[Camera] Warning: Could not find format supporting FPS \(fps). Keeping current format.")
+                }
             }
-
-            // Apply the chosen format (or keep the active one if none found)
-            let activeFormat = bestFormat ?? device.activeFormat
-            if device.activeFormat != activeFormat {
-                device.activeFormat = activeFormat
-            }
-
-            // Find the closest supported frame rate in the selected format
-            var targetFps = Double(fps)
-            var matchedRange: AVFrameRateRange?
             
+            // Set the frame rate on the active format
+            let activeFormat = device.activeFormat
+            var matchedRange: AVFrameRateRange?
             for range in activeFormat.videoSupportedFrameRateRanges {
                 if range.minFrameRate <= targetFps && range.maxFrameRate >= targetFps {
                     matchedRange = range
@@ -241,23 +282,21 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
                 }
             }
             
-            if matchedRange == nil {
-                // Clamp target FPS to the format's limits
-                if let firstRange = activeFormat.videoSupportedFrameRateRanges.first {
-                    targetFps = max(firstRange.minFrameRate, min(firstRange.maxFrameRate, targetFps))
-                    matchedRange = firstRange
-                }
-            }
-
-            if matchedRange != nil {
-                print("Setting camera FPS to \(targetFps) (requested: \(fps))")
+            if let range = matchedRange {
+                print("[Camera] Setting camera FPS to \(targetFps) (duration: 1/\(targetFps))")
                 device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(targetFps))
                 device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(targetFps))
             } else {
-                print("Warning: Could not find valid frame rate range for format")
+                // Clamp target FPS to format limits
+                if let firstRange = activeFormat.videoSupportedFrameRateRanges.first {
+                    let clampedFps = max(firstRange.minFrameRate, min(firstRange.maxFrameRate, targetFps))
+                    print("[Camera] Target FPS \(fps) not supported by active format. Clamping to \(clampedFps)")
+                    device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(clampedFps))
+                    device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(clampedFps))
+                }
             }
         } catch {
-            print("Could not lock device for FPS configuration: \(error)")
+            print("[Camera] Error locking device for FPS configuration: \(error)")
         }
     }
     

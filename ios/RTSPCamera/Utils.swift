@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import os.log
 
 private let IFF_UP = Int32(0x1)
 private let IFF_LOOPBACK = Int32(0x8)
@@ -54,7 +55,7 @@ enum Utils {
     }
 }
 
-// Global override of Swift's print to forward logs to NSLog.
+// Global override of Swift's print to forward logs to NSLog and os_log.
 // This ensures logs are visible in the iOS system log console (Console.app, 3uTools, idevicesyslog) even without an attached Xcode debugger.
 public func print(_ items: Any..., separator: String = " ", terminator: String = "\n") {
     let output = items.map { String(describing: $0) }.joined(separator: separator)
@@ -62,4 +63,7 @@ public func print(_ items: Any..., separator: String = " ", terminator: String =
     Swift.print(output, terminator: terminator)
     #endif
     NSLog("[RTSPCamera] %@", output)
+    if #available(iOS 10.0, *) {
+        os_log("%{public}@", log: OSLog.default, type: .default, "[RTSPCamera] \(output)")
+    }
 }
