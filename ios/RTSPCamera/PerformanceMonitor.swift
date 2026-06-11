@@ -92,9 +92,11 @@ class PerformanceMonitor {
     func getMemoryUsage() -> String {
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
-        let result = withUnsafeMutablePointer(to: &info) { ptr in
-            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPtr in
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), reboundPtr, &count)
+        let result = withUnsafeMutablePointer(to: &info) { infoPtr in
+            withUnsafeMutablePointer(to: &count) { countPtr in
+                infoPtr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPtr in
+                    task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), reboundPtr, countPtr)
+                }
             }
         }
         guard result == KERN_SUCCESS else { return "MEM: N/A" }
@@ -146,9 +148,11 @@ class PerformanceMonitor {
         for i in 0..<Int(threadCount) {
             var info = thread_basic_info()
             var count = mach_msg_type_number_t(MemoryLayout<thread_basic_info>.size / MemoryLayout<integer_t>.size)
-            let kr = withUnsafeMutablePointer(to: &info) { ptr in
-                ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPtr in
-                    thread_info(threads[i], thread_flavor_t(THREAD_BASIC_INFO), reboundPtr, &count)
+            let kr = withUnsafeMutablePointer(to: &info) { infoPtr in
+                withUnsafeMutablePointer(to: &count) { countPtr in
+                    infoPtr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPtr in
+                        thread_info(threads[i], thread_flavor_t(THREAD_BASIC_INFO), reboundPtr, countPtr)
+                    }
                 }
             }
             if kr == KERN_SUCCESS {
