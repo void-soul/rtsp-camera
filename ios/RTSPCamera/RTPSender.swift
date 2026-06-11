@@ -278,7 +278,7 @@ class RTPSender {
             rtpBuffer[rtpHeaderSize + 2] = UInt8((auHeader >> 8) & 0xFF)
             rtpBuffer[rtpHeaderSize + 3] = UInt8(auHeader & 0xFF)
             
-            rtpBuffer[rtpHeaderSize + auHeaderSize...] = data
+            rtpBuffer.replaceSubrange(rtpHeaderSize + auHeaderSize..<rtpBuffer.count, with: data)
             
             self.sendPacket(data: rtpBuffer)
             self.rtcpSender?.updateRtpTimestamp(self.timestamp)
