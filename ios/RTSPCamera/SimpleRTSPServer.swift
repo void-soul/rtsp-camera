@@ -75,15 +75,11 @@ class SimpleRTSPServer {
             
             let clientIp = self.getIPAddress(from: connection.endpoint) ?? "Unknown"
             
-            if self.activeSession != nil {
-                print("Rejecting connection from \(clientIp) — single client limit reached")
-                // Reject with 453 Not Enough Bandwidth
-                let response = "RTSP/1.0 453 Not Enough Bandwidth\r\nCSeq: 0\r\n\r\n"
-                connection.start(queue: self.queue)
-                connection.send(content: response.data(using: .utf8), completion: .contentProcessed({ _ in
-                    connection.cancel()
-                }))
-                return
+            if let oldSession = self.activeSession {
+                print("New connection from \(clientIp) while session from \(oldSession.getClientIp()) is active. Closing old session.")
+                oldSession.close()
+                self.activeSession = nil
+                self.onSessionStop?()
             }
             
             print("Accepted RTSP connection from \(clientIp)")
@@ -95,12 +91,14 @@ class SimpleRTSPServer {
         }
     }
     
-    fileprivate func clearSession() {
+    fileprivate func clearSession(session: RTSPSession) {
         queue.async { [weak self] in
             guard let self = self else { return }
-            self.activeSession = nil
-            self.onClientChange?(nil)
-            self.onSessionStop?()
+            if self.activeSession === session {
+                self.activeSession = nil
+                self.onClientChange?(nil)
+                self.onSessionStop?()
+            }
         }
     }
     
@@ -369,6 +367,6 @@ private class RTSPSession {
     
     private func handleDisconnect() {
         connection.cancel()
-        server?.clearSession()
+        server?.clearSession(session: self)
     }
 }
