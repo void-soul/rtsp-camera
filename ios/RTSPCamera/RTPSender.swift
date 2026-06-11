@@ -119,6 +119,9 @@ class RTPSender {
     private var rtcpSender: RTCPSender?
     private var sentCodecConfig = false
     private let maxPacketSize = 1400
+
+    // Frame pacing: track wall clock time when first frame is sent
+    private var wallStartUs: Int64 = -1
     
     // Config params
     private let isH265: Bool
@@ -200,53 +203,76 @@ class RTPSender {
     func sendVideoFrame(data: Data, timestampUs: Int64, isKeyFrame: Bool) {
         queue.async { [weak self] in
             guard let self = self else { return }
-            
+
             // Maintain timestamp
             if self.streamStartPtsUs == -1 {
                 self.streamStartPtsUs = timestampUs
+                self.wallStartUs = Int64(CACurrentMediaTime() * 1_000_000)
             }
             let relativePtsUs = timestampUs - self.streamStartPtsUs
             self.timestamp = UInt32((relativePtsUs * Int64(self.clockRate) / 1000000) & 0xFFFFFFFF)
-            
-            if isKeyFrame && !self.sentCodecConfig {
-                self.sentCodecConfig = self.isH265 ? self.sendVpsSpsPps() : self.sendStapA()
-            }
-            
-            // Search NALUs inside Annex-B
-            var i = 0
-            let length = data.count
-            while i < length - 3 {
-                var startCodeSize = 0
-                if data[i] == 0 && data[i + 1] == 0 {
-                    if data[i + 2] == 1 {
-                        startCodeSize = 3
-                    } else if i + 3 < length && data[i + 2] == 0 && data[i + 3] == 1 {
-                        startCodeSize = 4
+
+            // Frame pacing: calculate when this frame should be sent based on PTS,
+            // so we send frames at real-time rate instead of in bursts.
+            let sendBlock = { [weak self] in
+                guard let self = self else { return }
+
+                if self.streamStartPtsUs == timestampUs {
+                    // First frame — send SPS/PPS immediately
+                    if isKeyFrame && !self.sentCodecConfig {
+                        self.sentCodecConfig = self.isH265 ? self.sendVpsSpsPps() : self.sendStapA()
                     }
                 }
-                
-                if startCodeSize > 0 {
-                    let start = i + startCodeSize
-                    let end = self.findNextStartCode(data: data, start: start)
-                    let nalSize = end - start
-                    
-                    if nalSize > 0 {
-                        let nalType = self.getNalType(data: data, offset: start)
-                        let isLastNALU = (end == length)
-                        
-                        if nalSize <= self.maxPacketSize {
-                            self.sendSingleNALUPacket(data: data, offset: start, size: nalSize, marker: isLastNALU)
-                        } else {
-                            self.sendFUAPackets(data: data, offset: start, size: nalSize, marker: isLastNALU)
+
+                // Search NALUs inside Annex-B
+                var i = 0
+                let length = data.count
+                while i < length - 3 {
+                    var startCodeSize = 0
+                    if data[i] == 0 && data[i + 1] == 0 {
+                        if data[i + 2] == 1 {
+                            startCodeSize = 3
+                        } else if i + 3 < length && data[i + 2] == 0 && data[i + 3] == 1 {
+                            startCodeSize = 4
                         }
                     }
-                    i = end
+
+                    if startCodeSize > 0 {
+                        let start = i + startCodeSize
+                        let end = self.findNextStartCode(data: data, start: start)
+                        let nalSize = end - start
+
+                        if nalSize > 0 {
+                            let isLastNALU = (end == length)
+                            if nalSize <= self.maxPacketSize {
+                                self.sendSingleNALUPacket(data: data, offset: start, size: nalSize, marker: isLastNALU)
+                            } else {
+                                self.sendFUAPackets(data: data, offset: start, size: nalSize, marker: isLastNALU)
+                            }
+                        }
+                        i = end
+                    } else {
+                        i += 1
+                    }
+                }
+
+                self.rtcpSender?.updateRtpTimestamp(self.timestamp)
+            }
+
+            // First frame: send immediately. Others: pace to real-time.
+            if relativePtsUs == 0 {
+                sendBlock()
+            } else {
+                let nowUs = Int64(CACurrentMediaTime() * 1_000_000)
+                let targetSendUs = self.wallStartUs + relativePtsUs
+                let delayUs = targetSendUs - nowUs
+
+                if delayUs > 1000 { // > 1ms: schedule for later
+                    self.queue.asyncAfter(deadline: .now() + .microseconds(Int(delayUs)), execute: sendBlock)
                 } else {
-                    i += 1
+                    sendBlock() // Already behind schedule, send now
                 }
             }
-            
-            self.rtcpSender?.updateRtpTimestamp(self.timestamp)
         }
     }
     
