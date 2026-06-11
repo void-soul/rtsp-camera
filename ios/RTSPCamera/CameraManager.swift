@@ -162,10 +162,11 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     private func configureFPS(device: AVCaptureDevice, targetWidth: Int, targetHeight: Int, fps: Int) {
         do {
             try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
 
             let targetPixels = targetWidth * targetHeight
 
-            // Find format matching BOTH resolution and FPS
+            // Pass 1: Find format matching both resolution and FPS
             var bestFormat: AVCaptureDevice.Format?
             var bestPixelDiff = Int.max
 
@@ -198,18 +199,63 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
                 }
             }
 
-            if let format = bestFormat {
-                device.activeFormat = format
-                device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
-                device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
-            } else {
-                // Fallback: just set FPS duration without changing format
-                // (let session preset handle resolution)
-                device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
-                device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
+            // Pass 2: If no format matches both, find format matching resolution only
+            if bestFormat == nil {
+                bestPixelDiff = Int.max
+                for format in device.formats {
+                    let desc = format.formatDescription
+                    let dims = CMVideoFormatDescriptionGetDimensions(desc)
+                    let w = Int(dims.width)
+                    let h = Int(dims.height)
+
+                    let isLandscape = w >= h
+                    let fw = isLandscape ? w : h
+                    let fh = isLandscape ? h : w
+                    let tw = max(targetWidth, targetHeight)
+                    let th = min(targetWidth, targetHeight)
+
+                    guard fw >= tw && fh >= th else { continue }
+
+                    let diff = (fw * fh) - targetPixels
+                    if diff < bestPixelDiff {
+                        bestPixelDiff = diff
+                        bestFormat = format
+                    }
+                }
             }
 
-            device.unlockForConfiguration()
+            // Apply the chosen format (or keep the active one if none found)
+            let activeFormat = bestFormat ?? device.activeFormat
+            if device.activeFormat != activeFormat {
+                device.activeFormat = activeFormat
+            }
+
+            // Find the closest supported frame rate in the selected format
+            var targetFps = Double(fps)
+            var matchedRange: AVFrameRateRange?
+            
+            for range in activeFormat.videoSupportedFrameRateRanges {
+                if range.minFrameRate <= targetFps && range.maxFrameRate >= targetFps {
+                    matchedRange = range
+                    break
+                }
+            }
+            
+            if matchedRange == nil {
+                // Clamp target FPS to the format's limits
+                if let firstRange = activeFormat.videoSupportedFrameRateRanges.first {
+                    targetFps = max(firstRange.minFrameRate, min(firstRange.maxFrameRate, targetFps))
+                    matchedRange = firstRange
+                }
+            }
+
+            if matchedRange != nil {
+                print("Setting camera FPS to \(targetFps) (requested: \(fps))")
+                device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(targetFps))
+                device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(targetFps))
+            } else {
+                print("Warning: Could not find valid frame rate range for format")
+            }
         } catch {
             print("Could not lock device for FPS configuration: \(error)")
         }

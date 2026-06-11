@@ -257,8 +257,19 @@ struct ContentView: View {
         }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
-            // Start camera preview on app launch (always visible)
-            startCameraPreview()
+            
+            // Explicitly request video and audio permissions on startup
+            AVCaptureDevice.requestAccess(for: .video) { videoGranted in
+                if videoGranted {
+                    AVCaptureDevice.requestAccess(for: .audio) { _ in
+                        DispatchQueue.main.async {
+                            startCameraPreview()
+                        }
+                    }
+                } else {
+                    print("Camera permission denied")
+                }
+            }
         }
     }
 
