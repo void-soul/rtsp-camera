@@ -356,7 +356,7 @@ private class RTSPSession {
         return "RTSP/1.0 \(status)\r\nCSeq: \(cSeq)\r\n\(headers)\r\n\r\n\(body)"
     }
     
-    private func getClientIp() -> String {
+    fileprivate func getClientIp() -> String {
         switch connection.endpoint {
         case .hostPort(let host, _):
             return String(describing: host)
