@@ -26,12 +26,29 @@ class RTCPSender {
         
         let host = NWEndpoint.Host(clientHost)
         let port = NWEndpoint.Port(integerLiteral: clientPort)
-        self.connection = NWConnection(host: host, port: port, using: .udp)
+        let parameters = NWParameters.udp
+        parameters.allowLocalEndpointReuse = true
+        self.connection = NWConnection(host: host, port: port, using: parameters)
     }
     
     func start() {
         guard let connection = connection else { return }
         isRunning = true
+        
+        let clientHostDesc = connection.endpoint.description
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                print("[RTSPCamera] RTCPSender UDP connection to \(clientHostDesc) ready")
+            case .failed(let error):
+                print("[RTSPCamera] RTCPSender UDP connection failed: \(error)")
+            case .waiting(let error):
+                print("[RTSPCamera] RTCPSender UDP connection waiting: \(error)")
+            default:
+                break
+            }
+        }
+        
         connection.start(queue: queue)
         
         scheduleNextSenderReport()
@@ -147,6 +164,8 @@ class RTPSender {
     private var rtcpSender: RTCPSender?
     private var sentCodecConfig = false
     private let maxPacketSize = 1400
+    private var debugFrameCount = 0
+    private var debugByteCount = 0
 
     // Frame pacing: track wall clock time when first frame is sent
     private var wallStartUs: Int64 = -1
@@ -188,16 +207,40 @@ class RTPSender {
     func start() {
         queue.async { [weak self] in
             guard let self = self else { return }
+            print("[RTSPCamera] RTPSender \(self.codec) starting: host=\(self.clientHost), port=\(self.clientPort), isTcp=\(self.isTcp)")
+            
             if !self.isTcp {
                 // Initialize UDP sockets
                 let host = NWEndpoint.Host(self.clientHost)
                 let rtpPort = NWEndpoint.Port(integerLiteral: self.clientPort)
                 let rtcpPort = NWEndpoint.Port(integerLiteral: self.clientPort + 1)
                 
-                self.rtpUdpConnection = NWConnection(host: host, port: rtpPort, using: .udp)
-                self.rtpUdpConnection?.start(queue: self.queue)
+                let rtpParams = NWParameters.udp
+                rtpParams.allowLocalEndpointReuse = true
                 
-                self.rtcpUdpConnection = NWConnection(host: host, port: rtcpPort, using: .udp)
+                let rtpConn = NWConnection(host: host, port: rtpPort, using: rtpParams)
+                self.rtpUdpConnection = rtpConn
+                
+                rtpConn.stateUpdateHandler = { [weak self] state in
+                    guard let self = self else { return }
+                    switch state {
+                    case .ready:
+                        print("[RTSPCamera] RTPSender \(self.codec) UDP connection to \(self.clientHost):\(self.clientPort) ready")
+                    case .failed(let error):
+                        print("[RTSPCamera] RTPSender \(self.codec) UDP connection failed: \(error)")
+                    case .waiting(let error):
+                        print("[RTSPCamera] RTPSender \(self.codec) UDP connection waiting: \(error)")
+                    default:
+                        break
+                    }
+                }
+                
+                rtpConn.start(queue: self.queue)
+                
+                let rtcpParams = NWParameters.udp
+                rtcpParams.allowLocalEndpointReuse = true
+                self.rtcpUdpConnection = NWConnection(host: host, port: rtcpPort, using: rtcpParams)
+                // Note: rtcpUdpConnection start is handled by rtcpSender below
                 
                 let rtcp = RTCPSender(clientHost: self.clientHost, clientPort: self.clientPort + 1, ssrc: self.ssrc, clockRate: self.clockRate)
                 rtcp.onPacketLoss = { [weak self] fractionLost in
@@ -244,16 +287,19 @@ class RTPSender {
             let relativePtsUs = timestampUs - self.streamStartPtsUs
             self.timestamp = UInt32((relativePtsUs * Int64(self.clockRate) / 1000000) & 0xFFFFFFFF)
 
+            self.debugFrameCount += 1
+            self.debugByteCount += data.count
+            if self.debugFrameCount % 150 == 0 {
+                print("[RTSPCamera] RTPSender \(self.codec) sent \(self.debugFrameCount) frames (\(self.debugByteCount) bytes)")
+            }
+
             // Frame pacing: calculate when this frame should be sent based on PTS,
             // so we send frames at real-time rate instead of in bursts.
             let sendBlock = { [weak self] in
                 guard let self = self else { return }
 
-                if self.streamStartPtsUs == timestampUs {
-                    // First frame — send SPS/PPS immediately
-                    if isKeyFrame && !self.sentCodecConfig {
-                        self.sentCodecConfig = self.isH265 ? self.sendVpsSpsPps() : self.sendStapA()
-                    }
+                if isKeyFrame {
+                    _ = self.isH265 ? self.sendVpsSpsPps() : self.sendStapA()
                 }
 
                 // Search NALUs inside Annex-B
@@ -318,6 +364,12 @@ class RTPSender {
             }
             let relativePtsUs = timestampUs - self.streamStartPtsUs
             self.timestamp = UInt32((relativePtsUs * Int64(self.clockRate) / 1000000) & 0xFFFFFFFF)
+            
+            self.debugFrameCount += 1
+            self.debugByteCount += data.count
+            if self.debugFrameCount % 200 == 0 {
+                print("[RTSPCamera] RTPSender \(self.codec) sent \(self.debugFrameCount) frames (\(self.debugByteCount) bytes)")
+            }
             
             // RFC 3640 AAC
             let rtpHeaderSize = 12

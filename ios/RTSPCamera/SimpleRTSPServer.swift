@@ -183,13 +183,21 @@ private class RTSPSession {
                 requestBuffer.removeSubrange(0..<(4 + length)) // Discard client RTCP interleaved packets
             } else {
                 let delimiter = Data([0x0D, 0x0A, 0x0D, 0x0A])
-                guard let range = requestBuffer.range(of: delimiter) else { return }
+                guard let range = requestBuffer.range(of: delimiter) else {
+                    if requestBuffer.count > 8192 {
+                        print("[RTSPCamera] Warning: request buffer exceeded 8KB without delimiter, clearing.")
+                        requestBuffer.removeAll()
+                    }
+                    return
+                }
                 
                 let requestData = requestBuffer.subdata(in: 0..<range.upperBound)
                 requestBuffer.removeSubrange(0..<range.upperBound)
                 
                 if let requestString = String(data: requestData, encoding: .utf8) {
+                    print("[RTSPCamera] Client Request:\n\(requestString.trimmingCharacters(in: .whitespacesAndNewlines))")
                     let (response, isPlayRequest) = processRequest(requestString)
+                    print("[RTSPCamera] Server Response:\n\(response.trimmingCharacters(in: .whitespacesAndNewlines))")
                     connection.send(content: response.data(using: .utf8), completion: .contentProcessed({ [weak self] _ in
                         guard let self = self else { return }
                         if isPlayRequest {
@@ -315,6 +323,8 @@ private class RTSPSession {
         let pps = server.getPps?()
         let vps = server.getVps?()
         
+        print("[RTSPCamera] buildSDP: SPS length = \(sps?.count ?? -1), PPS length = \(pps?.count ?? -1), VPS length = \(vps?.count ?? -1)")
+        
         let ip = Utils.getIPAddress()
         let base = "rtsp://\(ip):\(server.port)\(server.path)"
         
@@ -338,8 +348,17 @@ private class RTSPSession {
                 let ppsB64 = extractNAL(pps).base64EncodedString()
                 sprop = ";sprop-parameter-sets=\(spsB64),\(ppsB64)"
             }
-            // Baseline Profile level ID default: 640029 or 42e01f
-            let profileLevelId = "42e01f"
+            
+            // Dynamically extract profile-level-id from H.264 SPS payload
+            var profileLevelId = "42e01f"
+            if let sps = sps {
+                let spsBytes = extractNAL(sps)
+                if spsBytes.count >= 4 {
+                    profileLevelId = String(format: "%02x%02x%02x", spsBytes[1], spsBytes[2], spsBytes[3])
+                    print("[RTSPCamera] Extracted profile-level-id from SPS: \(profileLevelId)")
+                }
+            }
+            
             videoSection = "m=video 0 RTP/AVP 96\r\n" +
                            "a=rtpmap:96 H264/90000\r\n" +
                            "a=fmtp:96 packetization-mode=1;profile-level-id=\(profileLevelId)\(sprop)\r\n" +
