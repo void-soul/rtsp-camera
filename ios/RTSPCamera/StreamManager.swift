@@ -3,7 +3,7 @@ import Network
 import Combine
 import QuartzCore
 
-class StreamManager: ObservableObject {
+class StreamManager: NSObject, ObservableObject {
     static let shared = StreamManager()
 
     @Published var isServerRunning = false
@@ -30,7 +30,8 @@ class StreamManager: ObservableObject {
     private var displayLink: CADisplayLink?
     private var cancellables = Set<AnyCancellable>()
     
-    private init() {
+    override init() {
+        super.init()
         setupCallbacks()
     }
     
