@@ -40,10 +40,22 @@ struct ParamMenu: View {
     var disabled: Bool = false
     var onSelect: ((String) -> Void)?
 
-    @State private var showing = false
-
     var body: some View {
-        Button(action: { if !disabled { showing = true } }) {
+        Menu {
+            ForEach(options, id: \.self) { opt in
+                Button(action: {
+                    selection = opt
+                    onSelect?(opt)
+                }) {
+                    HStack {
+                        Text(opt)
+                        if opt == selection {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
             VStack(spacing: 1) {
                 Text(title)
                     .font(.system(size: 9))
@@ -56,38 +68,8 @@ struct ParamMenu: View {
             .padding(.vertical, 3)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .disabled(disabled)
         .opacity(disabled ? 0.35 : 1.0)
-        .popover(isPresented: $showing) {
-            VStack(spacing: 0) {
-                ForEach(options, id: \.self) { opt in
-                    Button(action: {
-                        selection = opt
-                        onSelect?(opt)
-                        showing = false
-                    }) {
-                        HStack {
-                            Text(opt)
-                                .font(.system(size: 13))
-                                .foregroundColor(opt == selection ? .blue : .primary)
-                            Spacer()
-                            if opt == selection {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(.blue)
-                            }
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                    }
-                    .buttonStyle(.plain)
-                    if opt != options.last {
-                        Divider().padding(.leading, 14)
-                    }
-                }
-            }
-            .frame(minWidth: 120)
-        }
     }
 
     private var displayValue: String {

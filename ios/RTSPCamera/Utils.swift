@@ -53,3 +53,13 @@ enum Utils {
         return address
     }
 }
+
+// Global override of Swift's print to forward logs to NSLog.
+// This ensures logs are visible in the iOS system log console (Console.app, 3uTools, idevicesyslog) even without an attached Xcode debugger.
+public func print(_ items: Any..., separator: String = " ", terminator: String = "\n") {
+    let output = items.map { String(describing: $0) }.joined(separator: separator)
+    #if DEBUG
+    Swift.print(output, terminator: terminator)
+    #endif
+    NSLog("[RTSPCamera] %@", output)
+}

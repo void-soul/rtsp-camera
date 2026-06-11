@@ -36,6 +36,9 @@ class SimpleRTSPServer {
         
         do {
             let parameters = NWParameters.tcp
+            if let tcpOptions = parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
+                tcpOptions.noDelay = true
+            }
             listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: port))
             
             listener?.newConnectionHandler = { [weak self] connection in
@@ -172,25 +175,46 @@ private class RTSPSession {
     }
     
     private func processBuffer() {
-        // Look for end of headers marker \r\n\r\n (0x0D 0x0A 0x0D 0x0A)
-        let delimiter = Data([0x0D, 0x0A, 0x0D, 0x0A])
-        guard let range = requestBuffer.range(of: delimiter) else { return }
-        
-        let requestData = requestBuffer.subdata(in: 0..<range.upperBound)
-        requestBuffer.removeSubrange(0..<range.upperBound)
-        
-        if let requestString = String(data: requestData, encoding: .utf8) {
-            let response = processRequest(requestString)
-            connection.send(content: response.data(using: .utf8), completion: .contentProcessed({ _ in }))
+        while !requestBuffer.isEmpty {
+            if requestBuffer[0] == 0x24 { // '$'
+                guard requestBuffer.count >= 4 else { return }
+                let length = (Int(requestBuffer[2]) << 8) | Int(requestBuffer[3])
+                guard requestBuffer.count >= 4 + length else { return }
+                requestBuffer.removeSubrange(0..<(4 + length)) // Discard client RTCP interleaved packets
+            } else {
+                let delimiter = Data([0x0D, 0x0A, 0x0D, 0x0A])
+                guard let range = requestBuffer.range(of: delimiter) else { return }
+                
+                let requestData = requestBuffer.subdata(in: 0..<range.upperBound)
+                requestBuffer.removeSubrange(0..<range.upperBound)
+                
+                if let requestString = String(data: requestData, encoding: .utf8) {
+                    let (response, isPlayRequest) = processRequest(requestString)
+                    connection.send(content: response.data(using: .utf8), completion: .contentProcessed({ [weak self] _ in
+                        guard let self = self else { return }
+                        if isPlayRequest {
+                            self.triggerSessionPlay()
+                        }
+                    }))
+                }
+            }
         }
     }
     
-    private func processRequest(_ request: String) -> String {
+    private func triggerSessionPlay() {
+        if !isPlaying {
+            isPlaying = true
+            let clientIp = getClientIp()
+            server?.onSessionPlay?(clientIp, clientVideoPort, clientAudioPort, useTcp, connection, videoTcpChannel, audioTcpChannel)
+        }
+    }
+    
+    private func processRequest(_ request: String) -> (String, Bool) {
         let lines = request.components(separatedBy: "\r\n")
-        guard let firstLine = lines.first else { return buildResponse("400 Bad Request", "") }
+        guard let firstLine = lines.first else { return (buildResponse("400 Bad Request", ""), false) }
         
         let parts = firstLine.components(separatedBy: " ")
-        guard parts.count >= 3 else { return buildResponse("400 Bad Request", "") }
+        guard parts.count >= 3 else { return (buildResponse("400 Bad Request", ""), false) }
         
         let method = parts[0]
         let url = parts[1]
@@ -207,15 +231,15 @@ private class RTSPSession {
         
         switch method {
         case "OPTIONS":
-            return buildResponse("200 OK", "Public: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN, GET_PARAMETER")
+            return (buildResponse("200 OK", "Public: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN, GET_PARAMETER"), false)
             
         case "DESCRIBE":
             let sdp = buildSDP()
-            return buildResponse(
+            return (buildResponse(
                 "200 OK",
                 "Content-Type: application/sdp\r\nContent-Length: \(sdp.utf8.count)",
                 sdp
-            )
+            ), false)
             
         case "SETUP":
             var transportHeader = ""
@@ -266,25 +290,20 @@ private class RTSPSession {
                 let serverPortRange = url.contains("track0") ? "50000-50001" : "50002-50003"
                 transportResp = "Transport: RTP/AVP;unicast;client_port=\(clientPort)-\(clientPort+1);server_port=\(serverPortRange)\r\nSession: \(rtspSessionId)"
             }
-            return buildResponse("200 OK", transportResp)
+            return (buildResponse("200 OK", transportResp), false)
             
         case "PLAY":
-            if !isPlaying {
-                isPlaying = true
-                let clientIp = getClientIp()
-                server?.onSessionPlay?(clientIp, clientVideoPort, clientAudioPort, useTcp, connection, videoTcpChannel, audioTcpChannel)
-            }
-            return buildResponse("200 OK", "Session: \(rtspSessionId)")
+            return (buildResponse("200 OK", "Session: \(rtspSessionId)"), true)
             
         case "TEARDOWN":
             handleDisconnect()
-            return buildResponse("200 OK", "Session: \(rtspSessionId)")
+            return (buildResponse("200 OK", "Session: \(rtspSessionId)"), false)
             
         case "GET_PARAMETER", "SET_PARAMETER":
-            return buildResponse("200 OK", "Session: \(rtspSessionId)")
+            return (buildResponse("200 OK", "Session: \(rtspSessionId)"), false)
             
         default:
-            return buildResponse("200 OK", "Session: \(rtspSessionId)")
+            return (buildResponse("200 OK", "Session: \(rtspSessionId)"), false)
         }
     }
     
