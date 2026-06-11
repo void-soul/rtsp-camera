@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Combine
 import QuartzCore
+import CoreMedia
 
 class StreamManager: NSObject, ObservableObject {
     static let shared = StreamManager()
