@@ -29,7 +29,9 @@ class RTCPSender {
         let parameters = NWParameters.udp
         parameters.allowLocalEndpointReuse = true
         if let local = localPort {
-            parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: NWEndpoint.Port(integerLiteral: local))
+            let isClientIpv6 = clientHost.contains(":")
+            let localHost: NWEndpoint.Host = isClientIpv6 ? .ipv6(.any) : .ipv4(.any)
+            parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: localHost, port: NWEndpoint.Port(integerLiteral: local))
         }
         self.connection = NWConnection(host: host, port: port, using: parameters)
     }
@@ -226,7 +228,9 @@ class RTPSender {
                 let rtpParams = NWParameters.udp
                 rtpParams.allowLocalEndpointReuse = true
                 if let local = self.localPort {
-                    rtpParams.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: NWEndpoint.Port(integerLiteral: local))
+                    let isClientIpv6 = self.clientHost.contains(":")
+                    let localHost: NWEndpoint.Host = isClientIpv6 ? .ipv6(.any) : .ipv4(.any)
+                    rtpParams.requiredLocalEndpoint = NWEndpoint.hostPort(host: localHost, port: NWEndpoint.Port(integerLiteral: local))
                 }
                 
                 let rtpConn = NWConnection(host: host, port: rtpPort, using: rtpParams)
@@ -252,7 +256,9 @@ class RTPSender {
                 rtcpParams.allowLocalEndpointReuse = true
                 if let local = self.localPort {
                     let rtcpLocalPort = local + 1
-                    rtcpParams.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: NWEndpoint.Port(integerLiteral: rtcpLocalPort))
+                    let isClientIpv6 = self.clientHost.contains(":")
+                    let localHost: NWEndpoint.Host = isClientIpv6 ? .ipv6(.any) : .ipv4(.any)
+                    rtcpParams.requiredLocalEndpoint = NWEndpoint.hostPort(host: localHost, port: NWEndpoint.Port(integerLiteral: rtcpLocalPort))
                 }
                 self.rtcpUdpConnection = NWConnection(host: host, port: rtcpPort, using: rtcpParams)
                 
@@ -308,63 +314,50 @@ class RTPSender {
                 print("[RTSPCamera] RTPSender \(self.codec) sent \(self.debugFrameCount) frames (\(self.debugByteCount) bytes)")
             }
 
-            // Frame pacing: calculate when this frame should be sent based on PTS,
-            // so we send frames at real-time rate instead of in bursts.
-            let sendBlock = { [weak self] in
-                guard let self = self else { return }
-
-                if isKeyFrame && !self.sentCodecConfig {
-                    self.sentCodecConfig = self.isH265 ? self.sendVpsSpsPps() : self.sendStapA()
-                }
-
-                // Search NALUs inside Annex-B
-                var i = 0
-                let length = data.count
-                while i < length - 3 {
-                    var startCodeSize = 0
-                    if data[i] == 0 && data[i + 1] == 0 {
-                        if data[i + 2] == 1 {
-                            startCodeSize = 3
-                        } else if i + 3 < length && data[i + 2] == 0 && data[i + 3] == 1 {
-                            startCodeSize = 4
-                        }
-                    }
-
-                    if startCodeSize > 0 {
-                        let start = i + startCodeSize
-                        let end = self.findNextStartCode(data: data, start: start)
-                        let nalSize = end - start
-
-                        if nalSize > 0 {
-                            let isLastNALU = (end == length)
-                            if nalSize <= self.maxPacketSize {
-                                self.sendSingleNALUPacket(data: data, offset: start, size: nalSize, marker: isLastNALU)
-                            } else {
-                                self.sendFUAPackets(data: data, offset: start, size: nalSize, marker: isLastNALU)
-                            }
-                        }
-                        i = end
-                    } else {
-                        i += 1
-                    }
-                }
-
-                self.rtcpSender?.updateRtpTimestamp(self.timestamp)
+            if isKeyFrame && !self.sentCodecConfig {
+                self.sentCodecConfig = self.isH265 ? self.sendVpsSpsPps() : self.sendStapA()
             }
 
-            // First frame: send immediately. Others: pace to real-time.
-            if relativePtsUs == 0 {
-                sendBlock()
-            } else {
-                let nowUs = Int64(CACurrentMediaTime() * 1_000_000)
-                let targetSendUs = self.wallStartUs + relativePtsUs
-                let delayUs = targetSendUs - nowUs
-
-                if delayUs > 1000 { // > 1ms: schedule for later
-                    self.queue.asyncAfter(deadline: .now() + .microseconds(Int(delayUs)), execute: sendBlock)
-                } else {
-                    sendBlock() // Already behind schedule, send now
+            // Search NALUs inside Annex-B
+            var i = 0
+            let length = data.count
+            var packetCount = 0
+            while i < length - 3 {
+                var startCodeSize = 0
+                if data[i] == 0 && data[i + 1] == 0 {
+                    if data[i + 2] == 1 {
+                        startCodeSize = 3
+                    } else if i + 3 < length && data[i + 2] == 0 && data[i + 3] == 1 {
+                        startCodeSize = 4
+                    }
                 }
+
+                if startCodeSize > 0 {
+                    let start = i + startCodeSize
+                    let end = self.findNextStartCode(data: data, start: start)
+                    let nalSize = end - start
+
+                    if nalSize > 0 {
+                        let isLastNALU = (end == length)
+                        if nalSize <= self.maxPacketSize {
+                            self.sendSingleNALUPacket(data: data, offset: start, size: nalSize, marker: isLastNALU)
+                            packetCount += 1
+                        } else {
+                            self.sendFUAPackets(data: data, offset: start, size: nalSize, marker: isLastNALU)
+                            packetCount += (nalSize + self.maxPacketSize - 1) / self.maxPacketSize
+                        }
+                    }
+                    i = end
+                } else {
+                    i += 1
+                }
+            }
+
+            self.rtcpSender?.updateRtpTimestamp(self.timestamp)
+
+            // Pacing sleep: for large I-frames on UDP, spread packet transmission slightly to avoid burst packet loss
+            if !self.isTcp && packetCount > 10 {
+                usleep(500)
             }
         }
     }
