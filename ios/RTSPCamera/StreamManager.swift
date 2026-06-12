@@ -95,9 +95,18 @@ class StreamManager: NSObject, ObservableObject {
         videoEncoder.setCallback { [weak self] data, isKeyFrame, timestampUs in
             guard let self = self else { return }
             
-            // Store SPS/PPS for SDP generation
-            if isKeyFrame, let sps = self.videoEncoder.sps, let pps = self.videoEncoder.pps {
-                self.videoFrameProvider.setParameterSets(data: sps + pps)
+            // Store SPS/PPS/VPS for SDP generation
+            if isKeyFrame {
+                let startCode = Data([0x00, 0x00, 0x00, 0x01])
+                if self.videoEncoder.currentCodec.lowercased() == "h265",
+                   let vps = self.videoEncoder.vps,
+                   let sps = self.videoEncoder.sps,
+                   let pps = self.videoEncoder.pps {
+                    self.videoFrameProvider.setParameterSets(data: startCode + vps + startCode + sps + startCode + pps)
+                } else if let sps = self.videoEncoder.sps,
+                          let pps = self.videoEncoder.pps {
+                    self.videoFrameProvider.setParameterSets(data: startCode + sps + startCode + pps)
+                }
             }
             
             // Obtain a frame from the pool, copy data, and enqueue
@@ -135,6 +144,7 @@ class StreamManager: NSObject, ObservableObject {
         let settings = SettingsManager.shared
         let ip = Utils.getIPAddress()
         streamUrl = "rtsp://\(ip):\(settings.rtspPort)\(settings.rtspPath)"
+        print("[RTSPCamera] startServer called, URL: \(streamUrl)")
 
         rtspServer = SimpleRTSPServer(
             port: UInt16(settings.rtspPort),
@@ -229,6 +239,7 @@ class StreamManager: NSObject, ObservableObject {
     }
     
     func stopServer() {
+        print("[RTSPCamera] stopServer called")
         guard isServerRunning else { return }
 
         rtspServer?.stop()

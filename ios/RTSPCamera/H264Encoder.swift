@@ -306,6 +306,35 @@ private let compressionCallback: VTCompressionOutputCallback = { (
     let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
     let timeUs = Int64(CMTimeGetSeconds(pts) * 1_000_000)
     
+    let startCode = Data([0x00, 0x00, 0x00, 0x01])
+    
+    if isKeyFrame {
+        encoder.lock.lock()
+        let localSps = encoder._sps
+        let localPps = encoder._pps
+        let localVps = encoder._vps
+        let isH265 = (encoder._currentCodec.lowercased() == "h265")
+        encoder.lock.unlock()
+        
+        if isH265 {
+            if let vps = localVps, let sps = localSps, let pps = localPps {
+                streamData.append(startCode)
+                streamData.append(vps)
+                streamData.append(startCode)
+                streamData.append(sps)
+                streamData.append(startCode)
+                streamData.append(pps)
+            }
+        } else {
+            if let sps = localSps, let pps = localPps {
+                streamData.append(startCode)
+                streamData.append(sps)
+                streamData.append(startCode)
+                streamData.append(pps)
+            }
+        }
+    }
+    
     while offset < totalLength - 4 {
         // Read 4-byte big-endian NALU length
         var naluLength: UInt32 = 0

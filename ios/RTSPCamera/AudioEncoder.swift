@@ -197,7 +197,7 @@ private let inputDataProc: AudioConverterComplexInputDataProc = { (
     let requestedPackets = ioNumberDataPackets.pointee
     let availablePackets = context.pointee.dataSize / context.pointee.bytesPerFrame
     
-    if availablePackets == 0 {
+    if availablePackets == 0 || requestedPackets == 0 {
         ioNumberDataPackets.pointee = 0
         return 100 // End of data
     }
