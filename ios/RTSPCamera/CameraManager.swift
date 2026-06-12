@@ -41,6 +41,11 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             
             print("[Camera] Configuring session with resolution: \(width)x\(height), FPS: \(fps), Audio: \(audioEnabled)")
             
+            let wasRunning = self.captureSession.isRunning
+            if wasRunning {
+                self.captureSession.stopRunning()
+            }
+            
             self.captureSession.beginConfiguration()
             
             // Turn off automatic audio configuration so we can configure it ourselves
@@ -53,6 +58,9 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             guard let videoDevice = self.findVideoDevice(for: self.activeCameraPosition) else {
                 print("[Camera] Could not find video device for position \(self.activeCameraPosition)")
                 self.captureSession.commitConfiguration()
+                if wasRunning {
+                    self.captureSession.startRunning()
+                }
                 return
             }
             
@@ -122,7 +130,6 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             // Configure video output (reuse if already added)
             if !self.captureSession.outputs.contains(self.videoOutput) {
                 self.videoOutput.alwaysDiscardsLateVideoFrames = true
-                self.videoOutput.setSampleBufferDelegate(self, queue: self.videoDataQueue)
                 self.videoOutput.videoSettings = [
                     kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) // NV12
                 ]
@@ -135,11 +142,12 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             } else {
                 print("[Camera] Reusing existing video output")
             }
+            // Always set the delegate and queue to ensure they are active
+            self.videoOutput.setSampleBufferDelegate(self, queue: self.videoDataQueue)
             
             // Configure audio output
             if audioEnabled {
                 if !self.captureSession.outputs.contains(self.audioOutput) {
-                    self.audioOutput.setSampleBufferDelegate(self, queue: self.audioDataQueue)
                     if self.captureSession.canAddOutput(self.audioOutput) {
                         self.captureSession.addOutput(self.audioOutput)
                         print("[Camera] Added audio output successfully")
@@ -149,17 +157,21 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
                 } else {
                     print("[Camera] Reusing existing audio output")
                 }
+                // Always set the delegate and queue to ensure they are active
+                self.audioOutput.setSampleBufferDelegate(self, queue: self.audioDataQueue)
             } else {
                 if self.captureSession.outputs.contains(self.audioOutput) {
                     self.captureSession.removeOutput(self.audioOutput)
                     print("[Camera] Removed audio output as audio is disabled")
                 }
+                self.audioOutput.setSampleBufferDelegate(nil, queue: nil)
             }
             
             self.captureSession.commitConfiguration()
             
             // Configure connection properties AFTER committing configuration
             if let connection = self.videoOutput.connection(with: .video) {
+                connection.isEnabled = true
                 if connection.isVideoOrientationSupported {
                     connection.videoOrientation = .landscapeRight
                     print("[Camera] Connection videoOrientation set to landscapeRight")
@@ -170,6 +182,10 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
                 }
             } else {
                 print("[Camera] Warning: video connection not found after commitConfiguration")
+            }
+            
+            if wasRunning {
+                self.captureSession.startRunning()
             }
             
             // Reset state trackers on main thread

@@ -178,7 +178,7 @@ class VideoFrameProvider {
 
 // MARK: - AudioFrameProvider (Pre-allocated pool + bounded queue for audio)
 class AudioFrameProvider {
-    private let poolSize = 50
+    private let poolSize = 150
     private let queueCapacity = 100
     private var framePool = [NativeFrame]()
     private var filledQueue = [NativeFrame]()
