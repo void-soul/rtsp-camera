@@ -92,9 +92,14 @@ class StreamManager: NSObject, ObservableObject {
         }
 
         // Handle encoded video frames — route through frame provider for pooling and queue management
+        var encFrameCount = 0
         videoEncoder.setCallback { [weak self] data, isKeyFrame, timestampUs in
             guard let self = self else { return }
-            
+            encFrameCount += 1
+            if encFrameCount <= 3 || encFrameCount % 90 == 0 {
+                print("[RTSPCamera] Encoder callback: frame #\(encFrameCount), size=\(data.count)B, keyframe=\(isKeyFrame), serverRunning=\(self.isServerRunning)")
+            }
+
             // Store SPS/PPS/VPS for SDP generation
             if isKeyFrame {
                 let startCode = Data([0x00, 0x00, 0x00, 0x01])
@@ -358,8 +363,13 @@ class StreamManager: NSObject, ObservableObject {
         }
 
         let delayMs = isTcp ? 100 : 0
+        print("[RTSPCamera] startStreaming: scheduling frame readers with \(delayMs)ms delay")
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
-            guard let self = self else { return }
+            guard let self = self else {
+                print("[RTSPCamera] startStreaming: self is nil when frame reader dispatch fired")
+                return
+            }
+            print("[RTSPCamera] startStreaming: starting video frame reader now")
             self.startVideoFrameReader()
             if settings.audioEnabled {
                 self.startAudioFrameReader()
@@ -368,11 +378,18 @@ class StreamManager: NSObject, ObservableObject {
 
         // Update FPS diagnostics
         startFpsMonitor()
+        print("[RTSPCamera] startStreaming: setup complete, waiting for frames")
     }
     
     private func startVideoFrameReader() {
+        var localFrameCount = 0
+        var lastLogTime = CACurrentMediaTime()
         let task = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
+            guard let self = self else {
+                print("[RTSPCamera] VideoFrameReader: self is nil, exiting")
+                return
+            }
+            print("[RTSPCamera] VideoFrameReader: loop starting, videoSender=\(self.videoSender != nil ? "valid" : "nil")")
             while self.videoSender != nil {
                 if let frame = self.videoFrameProvider.getFrameBlocking(timeoutMs: 1000) {
                     let data = Data(bytes: frame.buffer, count: frame.length)
@@ -380,9 +397,18 @@ class StreamManager: NSObject, ObservableObject {
                     let isKeyFrame = self.isKeyFrame(data: data)
                     self.videoSender?.sendVideoFrame(data: data, timestampUs: timestampUs, isKeyFrame: isKeyFrame)
                     self.sentFramesCount += 1
+                    localFrameCount += 1
                     self.videoFrameProvider.recycleFrame(frame)
+
+                    // Log first frame and then every 2 seconds
+                    let now = CACurrentMediaTime()
+                    if localFrameCount == 1 || now - lastLogTime >= 2.0 {
+                        print("[RTSPCamera] VideoFrameReader: sent \(localFrameCount) frames total, latest size=\(data.count)B keyframe=\(isKeyFrame)")
+                        lastLogTime = now
+                    }
                 }
             }
+            print("[RTSPCamera] VideoFrameReader: loop exited (videoSender became nil)")
         }
         videoFrameReadTask = task
         DispatchQueue.global(qos: .userInitiated).async(execute: task)

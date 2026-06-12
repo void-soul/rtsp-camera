@@ -217,6 +217,7 @@ class RTPSender {
     }
     
     func start() {
+        print("[RTSPCamera] RTPSender \(codec) start() called, isTcp=\(isTcp), tcpConnection=\(tcpConnection != nil ? "valid" : "nil")")
         queue.async { [weak self] in
             guard let self = self else { return }
             print("[RTSPCamera] RTPSender \(self.codec) starting: host=\(self.clientHost), port=\(self.clientPort), isTcp=\(self.isTcp), localPort=\(self.localPort ?? 0)")
@@ -315,12 +316,14 @@ class RTPSender {
 
             self.debugFrameCount += 1
             self.debugByteCount += data.count
-            if self.debugFrameCount % 150 == 0 {
-                print("[RTSPCamera] RTPSender \(self.codec) sent \(self.debugFrameCount) frames (\(self.debugByteCount) bytes)")
+            if self.debugFrameCount <= 2 || self.debugFrameCount % 150 == 0 {
+                print("[RTSPCamera] RTPSender \(self.codec) frame #\(self.debugFrameCount), size=\(data.count)B, keyframe=\(isKeyFrame), isTcp=\(self.isTcp), channel=\(self.tcpChannel)")
             }
 
             if isKeyFrame && !self.sentCodecConfig {
-                self.sentCodecConfig = self.isH265 ? self.sendVpsSpsPps() : self.sendStapA()
+                let sent = self.isH265 ? self.sendVpsSpsPps() : self.sendStapA()
+                self.sentCodecConfig = sent
+                print("[RTSPCamera] RTPSender \(self.codec) sent codec config (VPS/SPS/PPS): \(sent)")
             }
 
             // Search NALUs inside Annex-B
@@ -605,16 +608,27 @@ class RTPSender {
         rtcpSender?.reportPacket(length: data.count)
     }
 
+    private static var tcpSendCount = 0
     private func sendRawTcp(_ data: Data) {
+        RTPSender.tcpSendCount += 1
+        let count = RTPSender.tcpSendCount
+        if count <= 3 {
+            print("[RTSPCamera] RTPSender TCP send #\(count): \(data.count) bytes, connection=\(tcpConnection != nil ? "valid" : "nil")")
+        }
         tcpConnection?.send(content: data, completion: .contentProcessed({ [weak self] error in
             if let error = error {
                 print("[RTSPCamera] \(self?.codec ?? "") TCP send error: \(error)")
+            } else if count <= 3 {
+                print("[RTSPCamera] \(self?.codec ?? "") TCP send #\(count) succeeded")
             }
         }))
     }
 
     private func flushTcpBatch() {
         if isTcp && !tcpBatchData.isEmpty {
+            if debugFrameCount <= 2 {
+                print("[RTSPCamera] RTPSender \(codec) flushTcpBatch: \(tcpBatchData.count) bytes")
+            }
             sendRawTcp(tcpBatchData)
             tcpBatchData.removeAll(keepingCapacity: true)
         }

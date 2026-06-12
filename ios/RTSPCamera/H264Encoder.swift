@@ -223,10 +223,16 @@ private let compressionCallback: VTCompressionOutputCallback = { (
     }
     
     // Extract format description to get SPS/PPS/VPS
-    guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
-    
+    let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer)
+
     // Extract SPS/PPS/VPS when keyframe comes or if they are missing
-    if isKeyFrame && (encoder.sps == nil || encoder.pps == nil) {
+    let needsParams: Bool
+    if encoder.currentCodec.lowercased() == "h265" {
+        needsParams = encoder.sps == nil || encoder.pps == nil || encoder.vps == nil
+    } else {
+        needsParams = encoder.sps == nil || encoder.pps == nil
+    }
+    if isKeyFrame && needsParams, let formatDescription = formatDescription {
         if encoder.currentCodec.lowercased() == "h265" {
             var vpsSize = 0, spsSize = 0, ppsSize = 0
             var vpsCount = 0, spsCount = 0, ppsCount = 0
@@ -291,8 +297,16 @@ private let compressionCallback: VTCompressionOutputCallback = { (
         }
     }
     
+    // Log if formatDescription is nil (unusual but not fatal for NAL extraction)
+    if formatDescription == nil {
+        print("[RTSPCamera] Encoder: formatDescription is nil for \(isKeyFrame ? "keyframe" : "delta frame"), NAL data will still be extracted")
+    }
+
     // Read the NALUs from block buffer and convert AVCC to Annex-B (prepending 0x00000001)
-    guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
+    guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
+        print("[RTSPCamera] Encoder: blockBuffer is nil, dropping frame")
+        return
+    }
     
     var totalLength = 0
     var dataPointer: UnsafeMutablePointer<CChar>?
@@ -364,7 +378,13 @@ private let compressionCallback: VTCompressionOutputCallback = { (
         encoder.lastFpsTimestamp = now
     }
     let cb = encoder.callback
+    let totalFrames = encoder.frameCount
     encoder.lock.unlock()
-    
+
+    // Log every 30 frames (~1/sec at 30fps) to confirm encoder is producing output
+    if totalFrames % 30 == 0 {
+        print("[RTSPCamera] Encoder: produced frame #\(totalFrames), size=\(streamData.count) bytes, keyframe=\(isKeyFrame)")
+    }
+
     cb?(streamData, isKeyFrame, timeUs)
 }

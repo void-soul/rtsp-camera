@@ -55,16 +55,17 @@ class VideoFrameProvider {
         isPrepared = true
     }
 
+    private var obtainLogCount = 0
     /// Get an empty frame from the pool, or steal/recycle the oldest from the filledQueue if the pool is empty
     func obtainEmptyFrame() -> NativeFrame? {
         lock.lock()
         defer { lock.unlock() }
         if !isPrepared { prepare() }
-        
+
         if let frame = framePool.popLast() {
             return frame
         }
-        
+
         // Resource recovery: if pool is empty, steal the oldest frame from filledQueue
         if !filledQueue.isEmpty {
             totalDroppedFrames += 1
@@ -73,7 +74,11 @@ class VideoFrameProvider {
             _ = semaphore.wait(timeout: .now()) // Decrement semaphore to stay in sync with filledQueue
             return oldest
         }
-        
+
+        obtainLogCount += 1
+        if obtainLogCount <= 3 || obtainLogCount % 300 == 0 {
+            print("[RTSPCamera] VideoFrameProvider: obtainEmptyFrame returned nil (pool=\(framePool.count), queue=\(filledQueue.count), total misses=\(obtainLogCount))")
+        }
         return nil
     }
 
@@ -82,9 +87,14 @@ class VideoFrameProvider {
         framePool.append(frame)
     }
 
+    private var addFrameCount = 0
     /// Add a filled frame to the bounded queue
     func addFrame(_ frame: NativeFrame) {
         lock.lock()
+        addFrameCount += 1
+        if addFrameCount <= 3 || addFrameCount % 90 == 0 {
+            print("[RTSPCamera] VideoFrameProvider: addFrame #\(addFrameCount), len=\(frame.length), queue=\(filledQueue.count)/\(queueCapacity)")
+        }
         if filledQueue.count >= queueCapacity {
             // Drop oldest
             if let oldest = filledQueue.first {
