@@ -33,7 +33,7 @@ class H264Encoder {
     
     private var currentWidth: Int32 = 0
     private var currentHeight: Int32 = 0
-    private var _currentCodec: String = ""
+    fileprivate var _currentCodec: String = ""
     
     var currentCodec: String {
         lock.lock()
