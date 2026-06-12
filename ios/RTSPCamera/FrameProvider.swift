@@ -40,7 +40,7 @@ class VideoFrameProvider {
 
     init(queueCapacity: Int = 5) {
         self.queueCapacity = queueCapacity
-        self.poolSize = queueCapacity + 10
+        self.poolSize = queueCapacity + 25 // 5 + 25 = 30
         self.semaphore = DispatchSemaphore(value: 0)
     }
 
@@ -55,12 +55,26 @@ class VideoFrameProvider {
         isPrepared = true
     }
 
-    /// Get an empty frame from the pool
+    /// Get an empty frame from the pool, or steal/recycle the oldest from the filledQueue if the pool is empty
     func obtainEmptyFrame() -> NativeFrame? {
         lock.lock()
         defer { lock.unlock() }
         if !isPrepared { prepare() }
-        return framePool.popLast()
+        
+        if let frame = framePool.popLast() {
+            return frame
+        }
+        
+        // Resource recovery: if pool is empty, steal the oldest frame from filledQueue
+        if !filledQueue.isEmpty {
+            totalDroppedFrames += 1
+            let oldest = filledQueue.removeFirst()
+            oldest.length = 0
+            _ = semaphore.wait(timeout: .now()) // Decrement semaphore to stay in sync with filledQueue
+            return oldest
+        }
+        
+        return nil
     }
 
     private func recycleFrameLocked(_ frame: NativeFrame) {
@@ -196,7 +210,17 @@ class AudioFrameProvider {
     func obtainEmptyFrame() -> NativeFrame? {
         lock.lock()
         defer { lock.unlock() }
-        return framePool.popLast()
+        if let frame = framePool.popLast() {
+            return frame
+        }
+        // Resource recovery: if pool is empty, steal the oldest frame from filledQueue
+        if !filledQueue.isEmpty {
+            let oldest = filledQueue.removeFirst()
+            oldest.length = 0
+            _ = semaphore.wait(timeout: .now()) // Decrement semaphore to stay in sync with filledQueue
+            return oldest
+        }
+        return nil
     }
 
     private func recycleFrameLocked(_ frame: NativeFrame) {

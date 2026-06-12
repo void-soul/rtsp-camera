@@ -129,10 +129,6 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             
             // Configure video output (reuse if already added)
             if !self.captureSession.outputs.contains(self.videoOutput) {
-                self.videoOutput.alwaysDiscardsLateVideoFrames = true
-                self.videoOutput.videoSettings = [
-                    kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) // NV12
-                ]
                 if self.captureSession.canAddOutput(self.videoOutput) {
                     self.captureSession.addOutput(self.videoOutput)
                     print("[Camera] Added video output successfully")
@@ -142,7 +138,11 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             } else {
                 print("[Camera] Reusing existing video output")
             }
-            // Always set the delegate and queue to ensure they are active
+            // Always apply settings and delegate to ensure they are active (especially after graph rebuilds)
+            self.videoOutput.alwaysDiscardsLateVideoFrames = true
+            self.videoOutput.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) // NV12
+            ]
             self.videoOutput.setSampleBufferDelegate(self, queue: self.videoDataQueue)
             
             // Configure audio output
