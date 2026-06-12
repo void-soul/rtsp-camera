@@ -330,8 +330,7 @@ class StreamManager: NSObject, ObservableObject {
         setupABR()
 
         // Start reading video frames from the frame provider and sending via RTP
-        startVideoFrameReader()
-
+        // For TCP, we add a 100ms delay to prevent socket flooding before the client processes the PLAY response.
         if settings.audioEnabled {
             audioSender = RTPSender(
                 clientHost: clientHost,
@@ -345,9 +344,15 @@ class StreamManager: NSObject, ObservableObject {
                 sharedState: sharedStreamState
             )
             audioSender?.start()
-            
-            // Start reading audio frames from the frame provider and sending via RTP
-            startAudioFrameReader()
+        }
+
+        let delayMs = isTcp ? 100 : 0
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
+            guard let self = self else { return }
+            self.startVideoFrameReader()
+            if settings.audioEnabled {
+                self.startAudioFrameReader()
+            }
         }
 
         // Update FPS diagnostics
@@ -430,16 +435,23 @@ class StreamManager: NSObject, ObservableObject {
     }
     
     private func isKeyFrame(data: Data) -> Bool {
-        // Check if the data contains an IDR NAL unit (H.264 type 5 or H.265 type 19/20)
+        // Check if the data contains an IDR NAL unit (H.264 type 5 or H.265 type 19/20/21)
+        let settings = SettingsManager.shared
+        let isH265 = (settings.videoCodec.lowercased() == "h265")
+        
         var i = 0
         while i < data.count - 4 {
             if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
-                let nalType = data[i + 3] & 0x1F // H.264
-                if nalType == 5 { return true } // IDR
+                let nalByte = data[i + 3]
+                let nalType = isH265 ? ((nalByte >> 1) & 0x3F) : (nalByte & 0x1F)
+                let isKey = isH265 ? (nalType >= 19 && nalType <= 21) : (nalType == 5)
+                if isKey { return true }
                 i += 3
             } else if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1 {
-                let nalType = data[i + 4] & 0x1F // H.264
-                if nalType == 5 { return true } // IDR
+                let nalByte = data[i + 4]
+                let nalType = isH265 ? ((nalByte >> 1) & 0x3F) : (nalByte & 0x1F)
+                let isKey = isH265 ? (nalType >= 19 && nalType <= 21) : (nalType == 5)
+                if isKey { return true }
                 i += 4
             } else {
                 i += 1

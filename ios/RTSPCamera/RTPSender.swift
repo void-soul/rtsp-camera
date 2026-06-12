@@ -313,8 +313,8 @@ class RTPSender {
             let sendBlock = { [weak self] in
                 guard let self = self else { return }
 
-                if isKeyFrame {
-                    _ = self.isH265 ? self.sendVpsSpsPps() : self.sendStapA()
+                if isKeyFrame && !self.sentCodecConfig {
+                    self.sentCodecConfig = self.isH265 ? self.sendVpsSpsPps() : self.sendStapA()
                 }
 
                 // Search NALUs inside Annex-B
