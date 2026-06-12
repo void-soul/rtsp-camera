@@ -63,6 +63,11 @@ class VideoFrameProvider {
         return framePool.popLast()
     }
 
+    private func recycleFrameLocked(_ frame: NativeFrame) {
+        frame.length = 0
+        framePool.append(frame)
+    }
+
     /// Add a filled frame to the bounded queue
     func addFrame(_ frame: NativeFrame) {
         lock.lock()
@@ -70,7 +75,7 @@ class VideoFrameProvider {
             // Drop oldest
             if let oldest = filledQueue.first {
                 totalDroppedFrames += 1
-                recycleFrame(oldest)
+                recycleFrameLocked(oldest)
                 filledQueue.removeFirst()
             }
             // Request keyframe recovery (rate-limited to 1/sec)
@@ -96,9 +101,8 @@ class VideoFrameProvider {
 
     /// Return a frame to the pool
     func recycleFrame(_ frame: NativeFrame) {
-        frame.length = 0
         lock.lock()
-        framePool.append(frame)
+        recycleFrameLocked(frame)
         lock.unlock()
     }
 
@@ -195,11 +199,16 @@ class AudioFrameProvider {
         return framePool.popLast()
     }
 
+    private func recycleFrameLocked(_ frame: NativeFrame) {
+        frame.length = 0
+        framePool.append(frame)
+    }
+
     func addFrame(_ frame: NativeFrame) {
         lock.lock()
         if filledQueue.count >= queueCapacity {
             if let oldest = filledQueue.first {
-                recycleFrame(oldest)
+                recycleFrameLocked(oldest)
                 filledQueue.removeFirst()
             }
         }
@@ -217,9 +226,8 @@ class AudioFrameProvider {
     }
 
     func recycleFrame(_ frame: NativeFrame) {
-        frame.length = 0
         lock.lock()
-        framePool.append(frame)
+        recycleFrameLocked(frame)
         lock.unlock()
     }
 
