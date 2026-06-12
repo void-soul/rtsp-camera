@@ -139,6 +139,21 @@ private class RTSPSession {
     }
     
     func start() {
+        connection.stateUpdateHandler = { [weak self] state in
+            guard let self = self else { return }
+            switch state {
+            case .ready:
+                print("[RTSPCamera] Session connection ready")
+            case .failed(let error):
+                print("[RTSPCamera] Session connection failed: \(error)")
+                self.handleDisconnect()
+            case .cancelled:
+                print("[RTSPCamera] Session connection cancelled")
+                self.handleDisconnect()
+            default:
+                break
+            }
+        }
         connection.start(queue: queue)
         readNext()
     }

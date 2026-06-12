@@ -46,5 +46,7 @@
 	</array>
 	<key>UIRequiresFullScreen</key>
 	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>This app requires access to the local network to run the RTSP server and stream video to players on your local network.</string>
 </dict>
 </plist>

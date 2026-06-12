@@ -169,6 +169,8 @@ class RTPSender {
     
     private var rtcpSender: RTCPSender?
     private var sentCodecConfig = false
+    private var tcpBatchData = Data()
+    private var isBatching = false
     private let maxPacketSize = 1400
     private var debugFrameCount = 0
     private var debugByteCount = 0
@@ -300,6 +302,9 @@ class RTPSender {
         queue.async { [weak self] in
             guard let self = self else { return }
 
+            self.isBatching = true
+            self.tcpBatchData.removeAll(keepingCapacity: true)
+
             // Maintain timestamp
             let startPts = self.sharedState.getOrSetStartPts(timestampUs)
             if self.wallStartUs == -1 {
@@ -352,6 +357,9 @@ class RTPSender {
                     i += 1
                 }
             }
+
+            self.isBatching = false
+            self.flushTcpBatch()
 
             self.rtcpSender?.updateRtpTimestamp(self.timestamp)
 
@@ -585,11 +593,30 @@ class RTPSender {
             rtpHeader[3] = UInt8(data.count & 0xFF)
             
             let tcpFrame = rtpHeader + data
-            tcpConnection?.send(content: tcpFrame, completion: .contentProcessed({ _ in }))
+            if isBatching {
+                tcpBatchData.append(tcpFrame)
+            } else {
+                sendRawTcp(tcpFrame)
+            }
         } else {
             // Write UDP
             rtpUdpConnection?.send(content: data, completion: .contentProcessed({ _ in }))
         }
         rtcpSender?.reportPacket(length: data.count)
+    }
+
+    private func sendRawTcp(_ data: Data) {
+        tcpConnection?.send(content: data, completion: .contentProcessed({ [weak self] error in
+            if let error = error {
+                print("[RTSPCamera] \(self?.codec ?? "") TCP send error: \(error)")
+            }
+        }))
+    }
+
+    private func flushTcpBatch() {
+        if isTcp && !tcpBatchData.isEmpty {
+            sendRawTcp(tcpBatchData)
+            tcpBatchData.removeAll(keepingCapacity: true)
+        }
     }
 }
