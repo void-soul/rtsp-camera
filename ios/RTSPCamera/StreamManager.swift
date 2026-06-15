@@ -200,6 +200,10 @@ class StreamManager: NSObject, ObservableObject {
         // Configure audio session for background playback
         configureAudioSession()
 
+        // Pre-allocate the video frame pool up-front so the VideoToolbox callback
+        // thread never blocks on first-frame allocation (matches Android's H264FrameProvider).
+        videoFrameProvider.prepare()
+
         // Start camera and configure encoder immediately so SPS/PPS are available
         // before any client connects (matches Android's approach)
         cameraManager.configureSession(
@@ -391,6 +395,10 @@ class StreamManager: NSObject, ObservableObject {
             }
             print("[RTSPCamera] VideoFrameReader: loop starting, videoSender=\(self.videoSender != nil ? "valid" : "nil")")
             while self.videoSender != nil {
+                // Cooperative cancellation: DispatchWorkItem.cancel() does not interrupt a
+                // running closure, so we check on every loop iteration (at least once per
+                // 1s getFrameBlocking timeout) and exit promptly when stopStreaming() fires.
+                if task.isCancelled { break }
                 if let frame = self.videoFrameProvider.getFrameBlocking(timeoutMs: 1000) {
                     let data = Data(bytes: frame.buffer, count: frame.length)
                     let timestampUs = frame.timestampUs
@@ -413,11 +421,12 @@ class StreamManager: NSObject, ObservableObject {
         videoFrameReadTask = task
         DispatchQueue.global(qos: .userInitiated).async(execute: task)
     }
-    
+
     private func startAudioFrameReader() {
         let task = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             while self.audioSender != nil {
+                if task.isCancelled { break }
                 if let frame = self.audioFrameProvider.getFrameBlocking(timeoutMs: 1000) {
                     let data = Data(bytes: frame.buffer, count: frame.length)
                     let timestampUs = frame.timestampUs

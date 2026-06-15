@@ -44,10 +44,18 @@ class VideoFrameProvider {
         self.semaphore = DispatchSemaphore(value: 0)
     }
 
-    /// Allocate buffer pool lazily when streaming starts
+    /// Allocate buffer pool lazily when streaming starts.
+    /// Public entry point: acquires the lock then delegates to `prepareLocked()`.
     func prepare() {
         lock.lock()
         defer { lock.unlock() }
+        prepareLocked()
+    }
+
+    /// Internal allocation routine that MUST be called while already holding `lock`.
+    /// Split out so `obtainEmptyFrame()` can lazily prepare without re-entering the
+    /// non-reentrant `NSLock` (which previously deadlocked the encoder callback thread).
+    private func prepareLocked() {
         guard !isPrepared else { return }
         for _ in 0..<poolSize {
             framePool.append(NativeFrame(capacity: 2 * 1024 * 1024)) // 2MB per frame
@@ -60,7 +68,7 @@ class VideoFrameProvider {
     func obtainEmptyFrame() -> NativeFrame? {
         lock.lock()
         defer { lock.unlock() }
-        if !isPrepared { prepare() }
+        if !isPrepared { prepareLocked() }
 
         if let frame = framePool.popLast() {
             return frame

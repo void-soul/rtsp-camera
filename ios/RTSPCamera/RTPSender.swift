@@ -161,7 +161,21 @@ class RTPSender {
     private var rtcpUdpConnection: NWConnection?
     
     private let queue = DispatchQueue(label: "com.gld.rtsp_camera.rtpSenderQueue", qos: .userInteractive)
-    
+
+    /// Shared serial queue for all TCP writes to a given connection.
+    /// Video and audio RTPSenders share the same NWConnection in TCP interleaved mode;
+    /// without serialization, concurrent `NWConnection.send` calls from each sender's
+    /// queue can interleave the 4-byte `$|ch|len` interleaved headers, corrupting the
+    /// client's RTSP/RTP demuxer. Routing every actual socket write through this single
+    /// serial queue guarantees strict FIFO ordering on the byte stream.
+    static let sharedTcpWriteQueue = DispatchQueue(label: "com.gld.rtsp_camera.tcpWriteQueue", qos: .userInteractive)
+
+    /// Set true when the sender is stopped or its connection is known to be dead.
+    /// Checked at the entry of sendVideoFrame/sendAudioFrame to drop work early instead
+    /// of repeatedly sending into a cancelled connection.
+    private var isStopped = false
+    private let stopLock = NSLock()
+
     private var sequenceNumber: UInt16 = UInt16.random(in: 0...65535)
     private var ssrc: UInt32 = UInt32.random(in: 0...UInt32.max)
     private var timestamp: UInt32 = 0
@@ -218,6 +232,10 @@ class RTPSender {
     
     func start() {
         print("[RTSPCamera] RTPSender \(codec) start() called, isTcp=\(isTcp), tcpConnection=\(tcpConnection != nil ? "valid" : "nil")")
+        // Clear the stopped flag for this (re)start
+        stopLock.lock()
+        isStopped = false
+        stopLock.unlock()
         queue.async { [weak self] in
             guard let self = self else { return }
             print("[RTSPCamera] RTPSender \(self.codec) starting: host=\(self.clientHost), port=\(self.clientPort), isTcp=\(self.isTcp), localPort=\(self.localPort ?? 0)")
@@ -277,18 +295,29 @@ class RTPSender {
     }
     
     func stop() {
+        // Mark stopped immediately so in-flight sendVideoFrame/sendAudioFrame calls
+        // short-circuit instead of queueing more work onto a connection we're tearing down.
+        stopLock.lock()
+        isStopped = true
+        stopLock.unlock()
         queue.async { [weak self] in
             guard let self = self else { return }
             self.rtcpSender?.stop()
             self.rtcpSender = nil
-            
+
             self.rtpUdpConnection?.cancel()
             self.rtpUdpConnection = nil
             self.rtcpUdpConnection?.cancel()
             self.rtcpUdpConnection = nil
-            
+
             self.tcpConnection = nil
         }
+    }
+
+    private func isStoppedFlag() -> Bool {
+        stopLock.lock()
+        defer { stopLock.unlock() }
+        return isStopped
     }
     
     func resetSPSPPS() {
@@ -298,10 +327,13 @@ class RTPSender {
     }
     
     // MARK: - Sending Frames
-    
+
     func sendVideoFrame(data: Data, timestampUs: Int64, isKeyFrame: Bool) {
+        // Drop work early if this sender has been stopped (client disconnect / teardown).
+        if isStoppedFlag() { return }
         queue.async { [weak self] in
             guard let self = self else { return }
+            if self.isStoppedFlag() { return }
 
             self.isBatching = true
             self.tcpBatchData.removeAll(keepingCapacity: true)
@@ -374,9 +406,12 @@ class RTPSender {
     }
     
     func sendAudioFrame(data: Data, timestampUs: Int64) {
+        // Drop work early if this sender has been stopped (client disconnect / teardown).
+        if isStoppedFlag() { return }
         queue.async { [weak self] in
             guard let self = self else { return }
-            
+            if self.isStoppedFlag() { return }
+
             // Maintain timestamp
             let startPts = self.sharedState.getOrSetStartPts(timestampUs)
             let relativePtsUs = timestampUs - startPts
@@ -610,18 +645,29 @@ class RTPSender {
 
     private static var tcpSendCount = 0
     private func sendRawTcp(_ data: Data) {
+        // Bail out if we've been stopped — avoids writing to a torn-down connection.
+        if isStoppedFlag() { return }
         RTPSender.tcpSendCount += 1
         let count = RTPSender.tcpSendCount
         if count <= 3 {
             print("[RTSPCamera] RTPSender TCP send #\(count): \(data.count) bytes, connection=\(tcpConnection != nil ? "valid" : "nil")")
         }
-        tcpConnection?.send(content: data, completion: .contentProcessed({ [weak self] error in
-            if let error = error {
-                print("[RTSPCamera] \(self?.codec ?? "") TCP send error: \(error)")
-            } else if count <= 3 {
-                print("[RTSPCamera] \(self?.codec ?? "") TCP send #\(count) succeeded")
-            }
-        }))
+        // Route the actual socket write through the shared serial write queue so that
+        // video + audio RTPSenders (which share one NWConnection) cannot interleave
+        // their interleaved frame headers on the byte stream.
+        RTPSender.sharedTcpWriteQueue.async { [weak self] in
+            guard let self = self, !self.isStoppedFlag() else { return }
+            self.tcpConnection?.send(content: data, completion: .contentProcessed({ [weak self] error in
+                if let error = error {
+                    print("[RTSPCamera] \(self?.codec ?? "") TCP send error: \(error)")
+                    // Connection failed mid-stream — stop this sender so we don't keep
+                    // pushing frames into a dead socket.
+                    self?.stop()
+                } else if count <= 3 {
+                    print("[RTSPCamera] \(self?.codec ?? "") TCP send #\(count) succeeded")
+                }
+            }))
+        }
     }
 
     private func flushTcpBatch() {
