@@ -92,16 +92,23 @@ class H264Encoder {
         _currentCodec = codec
         
         let codecType: CMVideoCodecType = (codec.lowercased() == "h265") ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264
-        
+
         // Define callback context
         let encoderSelf = Unmanaged.passUnretained(self).toOpaque()
-        
+
+        // Explicitly prefer the hardware-accelerated VideoToolbox encoder. This keeps
+        // real-time encoding off the CPU and reduces per-frame latency, matching the
+        // behavior of Android's hardware MediaCodec path.
+        let encoderSpec: CFDictionary = [
+            kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: kCFBooleanTrue
+        ] as CFDictionary
+
         var status = VTCompressionSessionCreate(
             allocator: kCFAllocatorDefault,
             width: width,
             height: height,
             codecType: codecType,
-            encoderSpecification: nil,
+            encoderSpecification: encoderSpec,
             imageBufferAttributes: nil,
             compressedDataAllocator: nil,
             outputCallback: compressionCallback,
@@ -117,10 +124,25 @@ class H264Encoder {
         // Configure Session Properties
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse) // Low latency (No B-frames)
-        
+        // Require encoder output for every input frame without latency-generating lookahead.
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaximizePowerEfficiency, value: kCFBooleanFalse)
+
         let profile = (codecType == kCMVideoCodecType_HEVC) ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_Main_AutoLevel
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: profile)
-        
+
+        // Cap the peak data rate to smooth out I-frame bursts that otherwise flood the
+        // TCP send path and trigger PotPlayer buffering. Format: [bytes, duration_seconds]
+        // meaning "no more than `bytes` bytes over any `duration_seconds` window".
+        // We allow ~2.0x the average bitrate over a 1-second window so instantaneous
+        // keyframe spikes are clipped while still leaving headroom for motion.
+        let bitrateBps = bitrateMbps * 1000 * 1000
+        let peakBytes = Int(Double(bitrateBps) * 2.0 / 8.0) // bytes per second window
+        let dataRateLimits: [NSNumber] = [peakBytes as NSNumber, 1.0 as NSNumber]
+        let drStatus = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: dataRateLimits as CFArray)
+        if drStatus != noErr {
+            print("[RTSPCamera] Failed to set DataRateLimits: \(drStatus)")
+        }
+
         adjustDynamicParameters(fps: fps, bitrateMbps: bitrateMbps, gop: gop)
         
         status = VTCompressionSessionPrepareToEncodeFrames(session)

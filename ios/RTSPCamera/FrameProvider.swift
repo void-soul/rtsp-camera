@@ -7,6 +7,9 @@ class NativeFrame {
     let capacity: Int
     var length: Int = 0
     var timestampUs: Int64 = 0
+    /// Whether this frame is a keyframe (IDR). Populated by the encoder callback so
+    /// the sender loop does not need to re-scan NALUs to recover this information.
+    var isKeyFrame: Bool = false
 
     init(capacity: Int) {
         self.capacity = capacity

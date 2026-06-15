@@ -120,6 +120,7 @@ class StreamManager: NSObject, ObservableObject {
                 data.copyBytes(to: frame.buffer, count: copyLength)
                 frame.length = copyLength
                 frame.timestampUs = timestampUs
+                frame.isKeyFrame = isKeyFrame
                 self.videoFrameProvider.addFrame(frame)
             }
         }
@@ -417,7 +418,10 @@ class StreamManager: NSObject, ObservableObject {
                 if let frame = self.videoFrameProvider.getFrameBlocking(timeoutMs: 1000) {
                     let data = Data(bytes: frame.buffer, count: frame.length)
                     let timestampUs = frame.timestampUs
-                    let isKeyFrame = self.isKeyFrame(data: data)
+                    // The encoder callback already classified this frame; reuse that flag
+                    // instead of re-scanning the NAL byte stream here (saves an O(n) pass
+                    // over every frame, ~45KB for a P-frame, on the reader thread).
+                    let isKeyFrame = frame.isKeyFrame
                     self.videoSender?.sendVideoFrame(data: data, timestampUs: timestampUs, isKeyFrame: isKeyFrame)
                     self.sentFramesCount += 1
                     localFrameCount += 1
@@ -496,33 +500,7 @@ class StreamManager: NSObject, ObservableObject {
             self.abrTargetBitrateMbps = Double(self.abrTargetBitrate) / 1000000.0
         }
     }
-    
-    private func isKeyFrame(data: Data) -> Bool {
-        // Check if the data contains an IDR NAL unit (H.264 type 5 or H.265 type 19/20/21)
-        let settings = SettingsManager.shared
-        let isH265 = (settings.videoCodec.lowercased() == "h265")
-        
-        var i = 0
-        while i < data.count - 4 {
-            if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
-                let nalByte = data[i + 3]
-                let nalType = isH265 ? ((nalByte >> 1) & 0x3F) : (nalByte & 0x1F)
-                let isKey = isH265 ? (nalType >= 19 && nalType <= 21) : (nalType == 5)
-                if isKey { return true }
-                i += 3
-            } else if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1 {
-                let nalByte = data[i + 4]
-                let nalType = isH265 ? ((nalByte >> 1) & 0x3F) : (nalByte & 0x1F)
-                let isKey = isH265 ? (nalType >= 19 && nalType <= 21) : (nalType == 5)
-                if isKey { return true }
-                i += 4
-            } else {
-                i += 1
-            }
-        }
-        return false
-    }
-    
+
     private func stopStreaming() {
         // Only stop senders — keep encoder running so SPS/PPS remain available
         // for the next client connection. Encoder is stopped in stopServer().

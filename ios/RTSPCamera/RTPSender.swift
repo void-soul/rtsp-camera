@@ -189,6 +189,14 @@ class RTPSender {
     private var debugFrameCount = 0
     private var debugByteCount = 0
 
+    /// Backpressure semaphore for TCP writes. We wait() before emitting each frame and
+    /// signal() when the previous write completes, capping the sender at one in-flight
+    /// frame on the wire. When the client (PotPlayer) drains slowly, the wait propagates
+    /// up through sendVideoFrame's queue.async and the frame reader, so the encoder's
+    /// bounded frame provider drops frames instead of letting them pile up unboundedly
+    /// across the async queues. Initialized to 1 so the first frame ships immediately.
+    private let tcpSendSlot = DispatchSemaphore(value: 1)
+
     // Frame pacing: track wall clock time when first frame is sent
     private var wallStartUs: Int64 = -1
     
@@ -337,6 +345,12 @@ class RTPSender {
 
             self.isBatching = true
             self.tcpBatchData.removeAll(keepingCapacity: true)
+            // Pre-reserve a typical frame's worth of capacity (RTP payload + per-fragment
+            // interleaved headers) so the batch append loop does not trigger repeated
+            // Data reallocations/copies while assembling the ~32 fragments of a P-frame.
+            if self.tcpBatchData.capacity < 80 * 1024 {
+                self.tcpBatchData.reserveCapacity(80 * 1024)
+            }
 
             // Maintain timestamp
             let startPts = self.sharedState.getOrSetStartPts(timestampUs)
@@ -623,17 +637,35 @@ class RTPSender {
     
     private func sendPacket(data: Data) {
         if isTcp {
-            // Write TCP Interleaved Frame
-            var rtpHeader = Data(repeating: 0, count: 4)
-            rtpHeader[0] = 0x24 // Magic '$'
-            rtpHeader[1] = UInt8(tcpChannel)
-            rtpHeader[2] = UInt8((data.count >> 8) & 0xFF)
-            rtpHeader[3] = UInt8(data.count & 0xFF)
-            
-            let tcpFrame = rtpHeader + data
+            // Write the TCP Interleaved Frame directly into the batch buffer when batching,
+            // avoiding the intermediate `rtpHeader + data` allocation+copy per RTP fragment
+            // (a large P-frame is ~32 fragments, so this saves ~32 Data objects per frame).
             if isBatching {
-                tcpBatchData.append(tcpFrame)
+                tcpBatchData.append(0x24)                              // Magic '
+
+    private func flushTcpBatch() {
+        if isTcp && !tcpBatchData.isEmpty {
+            if debugFrameCount <= 2 {
+                print("[RTSPCamera] RTPSender \(codec) flushTcpBatch: \(tcpBatchData.count) bytes")
+            }
+            sendRawTcp(tcpBatchData)
+            tcpBatchData.removeAll(keepingCapacity: true)
+        }
+    }
+}
+
+                tcpBatchData.append(UInt8(tcpChannel))
+                tcpBatchData.append(UInt8((data.count >> 8) & 0xFF))
+                tcpBatchData.append(UInt8(data.count & 0xFF))
+                tcpBatchData.append(data)
             } else {
+                // Non-batch path (audio / codec config): build a single interleaved frame.
+                var tcpFrame = Data(capacity: 4 + data.count)
+                tcpFrame.append(0x24)
+                tcpFrame.append(UInt8(tcpChannel))
+                tcpFrame.append(UInt8((data.count >> 8) & 0xFF))
+                tcpFrame.append(UInt8(data.count & 0xFF))
+                tcpFrame.append(data)
                 sendRawTcp(tcpFrame)
             }
         } else {
@@ -647,6 +679,20 @@ class RTPSender {
     private func sendRawTcp(_ data: Data) {
         // Bail out if we've been stopped — avoids writing to a torn-down connection.
         if isStoppedFlag() { return }
+
+        // Backpressure: wait for the previous write to complete before issuing a new one.
+        // This caps the sender at one in-flight frame on the wire; when the client drains
+        // slowly the wait propagates up through sendVideoFrame's queue.async and the frame
+        // reader, so the encoder's bounded frame provider drops frames instead of letting
+        // them accumulate unboundedly across the async queues (the original cause of
+        // PotPlayer buffering). It also serializes this sender's writes.
+        tcpSendSlot.wait()
+
+        if isStoppedFlag() {
+            tcpSendSlot.signal()
+            return
+        }
+
         RTPSender.tcpSendCount += 1
         let count = RTPSender.tcpSendCount
         if count <= 3 {
@@ -656,16 +702,23 @@ class RTPSender {
         // video + audio RTPSenders (which share one NWConnection) cannot interleave
         // their interleaved frame headers on the byte stream.
         RTPSender.sharedTcpWriteQueue.async { [weak self] in
-            guard let self = self, !self.isStoppedFlag() else { return }
+            guard let self = self else { return }
+            if self.isStoppedFlag() {
+                self.tcpSendSlot.signal()
+                return
+            }
             self.tcpConnection?.send(content: data, completion: .contentProcessed({ [weak self] error in
+                guard let self = self else { return }
                 if let error = error {
-                    print("[RTSPCamera] \(self?.codec ?? "") TCP send error: \(error)")
+                    print("[RTSPCamera] \(self.codec) TCP send error: \(error)")
                     // Connection failed mid-stream — stop this sender so we don't keep
                     // pushing frames into a dead socket.
-                    self?.stop()
+                    self.stop()
                 } else if count <= 3 {
-                    print("[RTSPCamera] \(self?.codec ?? "") TCP send #\(count) succeeded")
+                    print("[RTSPCamera] \(self.codec) TCP send #\(count) succeeded")
                 }
+                // Release the backpressure slot for the next frame.
+                self.tcpSendSlot.signal()
             }))
         }
     }
