@@ -142,6 +142,9 @@ struct ContentView: View {
     @State private var showHelpDialog = false
     @State private var isUiVisible = true
     @State private var showAlertBorder = false
+    /// Monotonic id bumped whenever the UI language changes; applied via `.id()` on the
+    /// root so the whole view tree is rebuilt and all `L.tr()` lookups re-resolve.
+    @State private var uiLangId = 0
 
     // Active bottom control mode: nil, "zoom", "ev", "focus"
     @State private var activeControl: String? = nil
@@ -211,10 +214,8 @@ struct ContentView: View {
         }
         .statusBarHidden(true)
         .preferredColorScheme(.dark)
+        .id(uiLangId)
         .onTapGesture { isUiVisible.toggle() }
-        .alert("Network Settings", isPresented: $showNetworkDialog) {
-            // Handled separately below
-        }
         .overlay {
             if showNetworkDialog {
                 networkDialogOverlay
@@ -239,7 +240,7 @@ struct ContentView: View {
             if showCopiedToast {
                 VStack {
                     Spacer()
-                    Text("URL Copied")
+                    Text(L.tr("url_copied"))
                         .font(.caption)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
@@ -257,7 +258,9 @@ struct ContentView: View {
         }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
-            
+            // Sync the in-memory language table with the persisted preference on launch.
+            L.language = SettingsManager.shared.resolvedLanguage
+
             // Explicitly request video and audio permissions on startup
             AVCaptureDevice.requestAccess(for: .video) { videoGranted in
                 if videoGranted {
@@ -307,7 +310,7 @@ struct ContentView: View {
                         showCopiedToast = true
                     }
                 
-                Text("Press play to start streaming")
+                Text(L.tr("press_to_start"))
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.3))
             }
@@ -322,6 +325,16 @@ struct ContentView: View {
             ParamMenu(title: "RES", options: resolutions, selection: $resolution,
                       disabled: streamManager.isClientConnected) { val in
                 SettingsManager.shared.resolution = val
+                // Reconfigure the capture session immediately so the new resolution
+                // takes effect for the preview (and for the next streaming session),
+                // instead of only being applied on the next startServer().
+                let s = SettingsManager.shared
+                streamManager.cameraManager.configureSession(
+                    width: s.getWidth(),
+                    height: s.getHeight(),
+                    fps: s.fps,
+                    audioEnabled: streamManager.isServerRunning ? s.audioEnabled : false
+                )
             }
             VerticalDivider()
             ParamMenu(title: "BITRATE", options: bitrates.map { "\($0) Mbps" },
@@ -433,7 +446,20 @@ struct ContentView: View {
                     perfEnabled.toggle()
                     SettingsManager.shared.perfMonitorEnabled = perfEnabled
                 }
-                
+
+                // Language switch (Auto / 中文 / EN) — flips the table language and
+                // bumps uiLangId so the whole view tree re-renders with new strings.
+                Menu {
+                    Button("Auto") { setLanguage("auto") }
+                    Button("中文")  { setLanguage("zh") }
+                    Button("EN")   { setLanguage("en") }
+                } label: {
+                    Image(systemName: "globe")
+                        .font(.system(size: 14))
+                        .foregroundColor(.white)
+                        .frame(width: 30, height: 30)
+                }
+
                 // Help button
                 topBarButton(icon: "questionmark.circle") {
                     showHelpDialog = true
@@ -498,17 +524,17 @@ struct ContentView: View {
                 .onTapGesture { showWBPopup = false }
             
             VStack(spacing: 0) {
-                Text("White Balance")
+                Text(L.tr("white_balance"))
                     .font(.headline)
                     .padding()
-                
+
                 ForEach(["AUTO", "INCANDESCENT", "FLUORESCENT", "DAYLIGHT", "CLOUDY"], id: \.self) { mode in
                     Button(action: {
                         cameraManager.applyWhiteBalancePreset(mode)
                         showWBPopup = false
                     }) {
                         HStack {
-                            Text(mode)
+                            Text(wbDisplayLabel(mode))
                                 .foregroundColor(mode == cameraManager.currentWBMode ? .blue : .primary)
                             Spacer()
                             if mode == cameraManager.currentWBMode {
@@ -537,17 +563,17 @@ struct ContentView: View {
                 .onTapGesture { showFilterPopup = false }
             
             VStack(spacing: 0) {
-                Text("Filter")
+                Text(L.tr("filter"))
                     .font(.headline)
                     .padding()
-                
+
                 ForEach(["None", "B&W", "VIVID", "WARM", "COOL"], id: \.self) { filter in
                     Button(action: {
                         cameraManager.applyFilter(filter)
                         showFilterPopup = false
                     }) {
                         HStack {
-                            Text(filter)
+                            Text(filterDisplayLabel(filter))
                                 .foregroundColor(filter == cameraManager.currentFilter ? .blue : .primary)
                             Spacer()
                             if filter == cameraManager.currentFilter {
@@ -601,37 +627,37 @@ struct ContentView: View {
                 .onTapGesture { showHelpDialog = false }
             
             VStack(spacing: 0) {
-                Text("Help")
+                Text(L.tr("help"))
                     .font(.headline)
                     .padding()
-                
+
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        helpItem("Camera Preview", "Always visible. Toggle with eye icon in top bar.")
-                        helpItem("Start/Stop", "Red button on right edge starts/stops RTSP streaming.")
-                        helpItem("Resolution", "Tap RES to change (4K/1080p/720p).")
-                        helpItem("Bitrate", "Tap BITRATE to adjust (5-60 Mbps).")
-                        helpItem("FPS", "Tap FPS to set frame rate (24/30/60/120).")
-                        helpItem("GOP", "Tap GOP to set keyframe interval (I-frame every N frames).")
-                        helpItem("Codec", "Tap CODEC to switch H.264/H.265 (only when not streaming).")
-                        helpItem("Zoom", "Tap ZOOM, then use slider (1x-10x).")
-                        helpItem("Exposure", "Tap EV, then use slider (-3 to +3).")
-                        helpItem("Focus", "Tap FOCUS, then AF/MF toggle + slider.")
-                        helpItem("White Balance", "Tap WB for presets (Auto/Incandescent/Daylight/Cloudy).")
-                        helpItem("Filter", "Tap FILTER for effects (B&W/Vivid/Warm/Cool).")
-                        helpItem("Audio", "Toggle microphone with speaker icon.")
-                        helpItem("Flash", "Toggle torch with flashlight icon.")
-                        helpItem("Camera Flip", "Switch front/back with rotate icon.")
-                        helpItem("Preview Off", "Hide preview to save battery (eye icon).")
-                        helpItem("Performance", "Toggle HUD with chart icon.")
-                        helpItem("Network Settings", "Change RTSP port and path with network icon.")
+                        helpItem(L.tr("h_camera_preview"), L.tr("d_camera_preview"))
+                        helpItem(L.tr("h_start_stop"),     L.tr("d_start_stop"))
+                        helpItem(L.tr("h_resolution"),     L.tr("d_resolution"))
+                        helpItem(L.tr("h_bitrate"),        L.tr("d_bitrate"))
+                        helpItem(L.tr("h_fps"),            L.tr("d_fps"))
+                        helpItem(L.tr("h_gop"),            L.tr("d_gop"))
+                        helpItem(L.tr("h_codec"),          L.tr("d_codec"))
+                        helpItem(L.tr("h_zoom"),           L.tr("d_zoom"))
+                        helpItem(L.tr("h_exposure"),       L.tr("d_exposure"))
+                        helpItem(L.tr("h_focus"),          L.tr("d_focus"))
+                        helpItem(L.tr("h_wb"),             L.tr("d_wb"))
+                        helpItem(L.tr("h_filter"),         L.tr("d_filter"))
+                        helpItem(L.tr("h_audio"),          L.tr("d_audio"))
+                        helpItem(L.tr("h_flash"),          L.tr("d_flash"))
+                        helpItem(L.tr("h_flip"),           L.tr("d_flip"))
+                        helpItem(L.tr("h_preview_off"),    L.tr("d_preview_off"))
+                        helpItem(L.tr("h_perf"),           L.tr("d_perf"))
+                        helpItem(L.tr("h_network"),        L.tr("d_network"))
                     }
                     .padding(.horizontal, 16)
                 }
-                
+
                 Divider()
-                
-                Button("Close") { showHelpDialog = false }
+
+                Button(L.tr("close")) { showHelpDialog = false }
                     .padding()
             }
             .background(Color(.systemBackground))
@@ -750,7 +776,7 @@ struct ContentView: View {
     private var perfOverlay: some View {
         VStack(alignment: .leading, spacing: 6) {
             // Header
-            Text("PERFORMANCE MONITOR")
+            Text(L.tr("perf_title"))
                 .font(.system(size: 9, weight: .bold))
                 .foregroundColor(Color(red: 1.0, green: 0.84, blue: 0.0)) // Gold
                 .tracking(1.0)
@@ -818,6 +844,7 @@ struct ContentView: View {
         )
         .padding(.top, 40)
         .padding(.leading, 8)
+        .frame(maxWidth: 180, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -833,11 +860,11 @@ struct ContentView: View {
                 .onTapGesture { showNetworkDialog = false }
 
             VStack(spacing: 16) {
-                Text("Network Settings")
+                Text(L.tr("network_settings"))
                     .font(.headline)
 
                 HStack {
-                    Text("RTSP Port")
+                    Text(L.tr("rtsp_port"))
                         .frame(width: 80, alignment: .leading)
                     TextField("Port", text: $editPort)
                         .textFieldStyle(.roundedBorder)
@@ -845,16 +872,16 @@ struct ContentView: View {
                 }
 
                 HStack {
-                    Text("RTSP Path")
+                    Text(L.tr("rtsp_path"))
                         .frame(width: 80, alignment: .leading)
                     TextField("Path", text: $editPath)
                         .textFieldStyle(.roundedBorder)
                 }
 
                 HStack(spacing: 20) {
-                    Button("Cancel") { showNetworkDialog = false }
+                    Button(L.tr("cancel")) { showNetworkDialog = false }
                         .keyboardShortcut(.cancelAction)
-                    Button("OK") {
+                    Button(L.tr("ok")) {
                         if let p = Int(editPort), p > 0, p < 65536, editPath.hasPrefix("/") {
                             SettingsManager.shared.rtspPort = p
                             SettingsManager.shared.rtspPath = editPath
@@ -893,15 +920,49 @@ struct ContentView: View {
         }
     }
 
+    /// Switch the interface language. Persists the choice, updates the in-memory lookup
+    /// table language, and bumps uiLangId so SwiftUI rebuilds the entire view tree and
+    /// every L.tr() call re-resolves (runtime switching, no app relaunch needed).
+    private func setLanguage(_ code: String) {
+        SettingsManager.shared.language = code
+        L.language = SettingsManager.shared.resolvedLanguage
+        uiLangId += 1
+    }
+
+    /// Map an internal white-balance preset value to its localized display label.
+    /// The internal value (e.g. "INCANDESCENT") is still passed to applyWhiteBalancePreset.
+    private func wbDisplayLabel(_ mode: String) -> String {
+        switch mode {
+        case "AUTO":        return L.tr("wb_auto")
+        case "INCANDESCENT":return L.tr("wb_incandescent")
+        case "FLUORESCENT": return L.tr("wb_fluorescent")
+        case "DAYLIGHT":    return L.tr("wb_daylight")
+        case "CLOUDY":      return L.tr("wb_cloudy")
+        default:            return mode
+        }
+    }
+
+    /// Map an internal filter value to its localized display label.
+    private func filterDisplayLabel(_ filter: String) -> String {
+        switch filter {
+        case "None":  return L.tr("f_none")
+        case "B&W":   return L.tr("f_bw")
+        case "VIVID": return L.tr("f_vivid")
+        case "WARM":  return L.tr("f_warm")
+        case "COOL":  return L.tr("f_cool")
+        default:      return filter
+        }
+    }
+
     private func startCameraPreview() {
+        // Use the user's configured resolution for the preview session so that changing
+        // RES is reflected immediately and the next streaming session starts at the right
+        // format (previously this was hardcoded to 1280x720, which left the capture
+        // session stuck at 720p even after the user selected 1080p/4K).
         let settings = SettingsManager.shared
-        // Configure camera with lower resolution for preview to save power
-        let previewWidth = 1280
-        let previewHeight = 720
-        
         streamManager.cameraManager.configureSession(
-            width: previewWidth,
-            height: previewHeight,
+            width: settings.getWidth(),
+            height: settings.getHeight(),
             fps: settings.fps,
             audioEnabled: false // No audio needed for preview only
         )

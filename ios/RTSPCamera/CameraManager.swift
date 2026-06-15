@@ -237,18 +237,29 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
 
             let targetFps = Double(fps)
             let currentFormat = device.activeFormat
-            
+
+            // Check the current format's resolution against the target. If the user changed
+            // RES we must re-select a format even when the current one already supports the
+            // target FPS, otherwise the session stays stuck at the old resolution.
+            let curDims = CMVideoFormatDescriptionGetDimensions(currentFormat.formatDescription)
+            let curW = Int(curDims.width)
+            let curH = Int(curDims.height)
+            let targetPixels = targetWidth * targetHeight
+            let curPixels = curW * curH
+            // Allow a small tolerance so we don't needlessly re-select identical formats.
+            let resolutionMatches = abs(curPixels - targetPixels) <= max(targetPixels / 50, 1)
+
             // Check if current format supports target FPS
             let currentSupportsFps = currentFormat.videoSupportedFrameRateRanges.contains {
                 $0.minFrameRate <= targetFps && $0.maxFrameRate >= targetFps
             }
-            
-            if currentSupportsFps {
+
+            if currentSupportsFps && resolutionMatches {
                 // We can just keep the current format!
-                print("[Camera] Current active format supports target FPS \(fps). Keeping it.")
+                print("[Camera] Current active format (\(curW)x\(curH)) supports target FPS \(fps) and matches resolution. Keeping it.")
             } else {
                 // Find a format that supports the target FPS and matches the aspect ratio/resolution
-                print("[Camera] Current format does not support FPS \(fps). Searching for compatible format...")
+                print("[Camera] Current format (\(curW)x\(curH)) does not match target \(targetWidth)x\(targetHeight)@\(fps)fps. Searching for compatible format...")
                 var bestFormat: AVCaptureDevice.Format?
                 var bestPixelDiff = Int.max
                 let targetPixels = targetWidth * targetHeight

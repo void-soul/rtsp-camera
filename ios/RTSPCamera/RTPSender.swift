@@ -189,17 +189,6 @@ class RTPSender {
     private var debugFrameCount = 0
     private var debugByteCount = 0
 
-    /// Backpressure semaphore for TCP writes. We wait() before emitting each frame and
-    /// signal() when the previous write completes, capping the sender at one in-flight
-    /// frame on the wire. When the client (PotPlayer) drains slowly, the wait propagates
-    /// up through sendVideoFrame's queue.async and the frame reader, so the encoder's
-    /// bounded frame provider drops frames instead of letting them pile up unboundedly
-    /// across the async queues. Initialized to 1 so the first frame ships immediately.
-    private let tcpSendSlot = DispatchSemaphore(value: 1)
-
-    // Frame pacing: track wall clock time when first frame is sent
-    private var wallStartUs: Int64 = -1
-    
     // Config params
     private let isH265: Bool
     private let clockRate: UInt32
@@ -352,11 +341,8 @@ class RTPSender {
                 self.tcpBatchData.reserveCapacity(80 * 1024)
             }
 
-            // Maintain timestamp
+            // Maintain timestamp (relative to the first frame of this session)
             let startPts = self.sharedState.getOrSetStartPts(timestampUs)
-            if self.wallStartUs == -1 {
-                self.wallStartUs = Int64(CACurrentMediaTime() * 1_000_000)
-            }
             let relativePtsUs = timestampUs - startPts
             self.timestamp = UInt32((relativePtsUs * Int64(self.clockRate) / 1000000) & 0xFFFFFFFF)
 
@@ -680,45 +666,30 @@ class RTPSender {
         // Bail out if we've been stopped — avoids writing to a torn-down connection.
         if isStoppedFlag() { return }
 
-        // Backpressure: wait for the previous write to complete before issuing a new one.
-        // This caps the sender at one in-flight frame on the wire; when the client drains
-        // slowly the wait propagates up through sendVideoFrame's queue.async and the frame
-        // reader, so the encoder's bounded frame provider drops frames instead of letting
-        // them accumulate unboundedly across the async queues (the original cause of
-        // PotPlayer buffering). It also serializes this sender's writes.
-        tcpSendSlot.wait()
-
-        if isStoppedFlag() {
-            tcpSendSlot.signal()
-            return
-        }
-
         RTPSender.tcpSendCount += 1
         let count = RTPSender.tcpSendCount
         if count <= 3 {
             print("[RTSPCamera] RTPSender TCP send #\(count): \(data.count) bytes, connection=\(tcpConnection != nil ? "valid" : "nil")")
         }
-        // Route the actual socket write through the shared serial write queue so that
-        // video + audio RTPSenders (which share one NWConnection) cannot interleave
-        // their interleaved frame headers on the byte stream.
+        // Fire-and-forget the socket write on the shared serial queue. We intentionally do
+        // NOT wait for the previous frame's send completion: doing so (an earlier backpressure
+        // semaphore) accumulated NWConnection completion latency frame-over-frame and caused
+        // ~14s end-to-end latency. Instead we let NWConnection buffer/coalesce writes the way
+        // Android's OutputStream.write()+flush() does — non-blocking from the sender's loop.
+        // sharedTcpWriteQueue is serial so video/audio interleaved headers cannot interleave.
+        // If the encoder produces frames faster than the socket drains, the bounded frame
+        // provider (capacity 5) drops the oldest frames — preferable to buffering.
         RTPSender.sharedTcpWriteQueue.async { [weak self] in
-            guard let self = self else { return }
-            if self.isStoppedFlag() {
-                self.tcpSendSlot.signal()
-                return
-            }
+            guard let self = self, !self.isStoppedFlag() else { return }
             self.tcpConnection?.send(content: data, completion: .contentProcessed({ [weak self] error in
-                guard let self = self else { return }
                 if let error = error {
-                    print("[RTSPCamera] \(self.codec) TCP send error: \(error)")
+                    print("[RTSPCamera] \(self?.codec ?? "") TCP send error: \(error)")
                     // Connection failed mid-stream — stop this sender so we don't keep
                     // pushing frames into a dead socket.
-                    self.stop()
+                    self?.stop()
                 } else if count <= 3 {
-                    print("[RTSPCamera] \(self.codec) TCP send #\(count) succeeded")
+                    print("[RTSPCamera] \(self?.codec ?? "") TCP send #\(count) succeeded")
                 }
-                // Release the backpressure slot for the next frame.
-                self.tcpSendSlot.signal()
             }))
         }
     }
