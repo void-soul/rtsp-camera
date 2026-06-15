@@ -262,8 +262,10 @@ class StreamManager: NSObject, ObservableObject {
         audioSender = nil
 
         // Stop frame readers
+        videoReaderCancellation?.cancelled = true
         videoFrameReadTask?.cancel()
         videoFrameReadTask = nil
+        audioReaderCancellation?.cancelled = true
         audioFrameReadTask?.cancel()
         audioFrameReadTask = nil
 
@@ -283,7 +285,18 @@ class StreamManager: NSObject, ObservableObject {
     
     private var videoFrameReadTask: DispatchWorkItem?
     private var audioFrameReadTask: DispatchWorkItem?
-    
+    /// Reference-type cancellation flag shared between the StreamManager and the
+    /// frame-reader closures. Setting `cancelled = true` from stopStreaming() lets
+    /// the reader loops break out within one getFrameBlocking() timeout window.
+    /// We use a class (reference type) so the closure captures the same instance,
+    /// avoiding "captures 'task' before it is declared" errors when a DispatchWorkItem
+    /// closure would otherwise need to reference its own `task` constant.
+    private final class ReaderCancellation {
+        var cancelled: Bool = false
+    }
+    private var videoReaderCancellation: ReaderCancellation?
+    private var audioReaderCancellation: ReaderCancellation?
+
     // ABR (Adaptive Bitrate) state
     private var abrTargetBitrate: Int = 0
     private var abrLastLossCheckTime: TimeInterval = 0
@@ -388,6 +401,8 @@ class StreamManager: NSObject, ObservableObject {
     private func startVideoFrameReader() {
         var localFrameCount = 0
         var lastLogTime = CACurrentMediaTime()
+        let cancellation = ReaderCancellation()
+        videoReaderCancellation = cancellation
         let task = DispatchWorkItem { [weak self] in
             guard let self = self else {
                 print("[RTSPCamera] VideoFrameReader: self is nil, exiting")
@@ -395,10 +410,10 @@ class StreamManager: NSObject, ObservableObject {
             }
             print("[RTSPCamera] VideoFrameReader: loop starting, videoSender=\(self.videoSender != nil ? "valid" : "nil")")
             while self.videoSender != nil {
-                // Cooperative cancellation: DispatchWorkItem.cancel() does not interrupt a
-                // running closure, so we check on every loop iteration (at least once per
-                // 1s getFrameBlocking timeout) and exit promptly when stopStreaming() fires.
-                if task.isCancelled { break }
+                // Cooperative cancellation: stopStreaming() sets the shared flag so the
+                // loop breaks out within one getFrameBlocking() timeout window instead of
+                // spinning on a stale videoSender reference across queues.
+                if cancellation.cancelled { break }
                 if let frame = self.videoFrameProvider.getFrameBlocking(timeoutMs: 1000) {
                     let data = Data(bytes: frame.buffer, count: frame.length)
                     let timestampUs = frame.timestampUs
@@ -423,10 +438,12 @@ class StreamManager: NSObject, ObservableObject {
     }
 
     private func startAudioFrameReader() {
+        let cancellation = ReaderCancellation()
+        audioReaderCancellation = cancellation
         let task = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             while self.audioSender != nil {
-                if task.isCancelled { break }
+                if cancellation.cancelled { break }
                 if let frame = self.audioFrameProvider.getFrameBlocking(timeoutMs: 1000) {
                     let data = Data(bytes: frame.buffer, count: frame.length)
                     let timestampUs = frame.timestampUs
@@ -516,8 +533,12 @@ class StreamManager: NSObject, ObservableObject {
         audioSender = nil
 
         // Stop frame readers
+        videoReaderCancellation?.cancelled = true
+        videoReaderCancellation = nil
         videoFrameReadTask?.cancel()
         videoFrameReadTask = nil
+        audioReaderCancellation?.cancelled = true
+        audioReaderCancellation = nil
         audioFrameReadTask?.cancel()
         audioFrameReadTask = nil
 
