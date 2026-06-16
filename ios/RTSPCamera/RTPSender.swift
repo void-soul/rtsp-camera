@@ -627,19 +627,7 @@ class RTPSender {
             // avoiding the intermediate `rtpHeader + data` allocation+copy per RTP fragment
             // (a large P-frame is ~32 fragments, so this saves ~32 Data objects per frame).
             if isBatching {
-                tcpBatchData.append(0x24)                              // Magic '
-
-    private func flushTcpBatch() {
-        if isTcp && !tcpBatchData.isEmpty {
-            if debugFrameCount <= 2 {
-                print("[RTSPCamera] RTPSender \(codec) flushTcpBatch: \(tcpBatchData.count) bytes")
-            }
-            sendRawTcp(tcpBatchData)
-            tcpBatchData.removeAll(keepingCapacity: true)
-        }
-    }
-}
-
+                tcpBatchData.append(0x24)                              // Magic '$'
                 tcpBatchData.append(UInt8(tcpChannel))
                 tcpBatchData.append(UInt8((data.count >> 8) & 0xFF))
                 tcpBatchData.append(UInt8(data.count & 0xFF))
