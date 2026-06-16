@@ -3,7 +3,7 @@ import Foundation
 class SettingsManager {
     static let shared = SettingsManager()
     
-    private let defaults = UserDefaults.standard
+    let defaults = UserDefaults.standard
     
     private init() {}
     

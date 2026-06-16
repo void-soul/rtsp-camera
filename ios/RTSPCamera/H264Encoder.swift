@@ -99,9 +99,13 @@ class H264Encoder {
         // Explicitly prefer the hardware-accelerated VideoToolbox encoder. This keeps
         // real-time encoding off the CPU and reduces per-frame latency, matching the
         // behavior of Android's hardware MediaCodec path.
-        let encoderSpec: CFDictionary = [
-            kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: kCFBooleanTrue
-        ] as CFDictionary
+        // kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder requires iOS 17.4+.
+        var encoderSpec: CFDictionary? = nil
+        if #available(iOS 17.4, *) {
+            encoderSpec = [
+                kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: kCFBooleanTrue
+            ] as CFDictionary
+        }
 
         var status = VTCompressionSessionCreate(
             allocator: kCFAllocatorDefault,
