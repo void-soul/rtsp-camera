@@ -677,16 +677,9 @@ class RTPSender {
             tcpFrame.append(UInt8(data.count & 0xFF))           // Length lo
             tcpFrame.append(data)
             sendRawTcp(tcpFrame)
-
-            // Micro-pacing between packets within a single video frame so they are
-            // not dispatched to NWConnection in a tight zero-delay loop, which would
-            // cause NWConnection to coalesce them into one large burst on the wire.
-            // 80 μs × ~25 packets (P-frame) ≈ 2 ms spread — well under the 33 ms
-            // frame period but enough to give the kernel/NWConnection time to push
-            // earlier packets out before the next arrives.
-            if isBatching {
-                usleep(80)
-            }
+            // No inter-packet pacing: NWConnection internally buffers and paces
+            // outgoing data; explicit usleep only backs up the rtpSenderQueue and
+            // delays stop() cleanup.
         } else {
             // Write UDP
             rtpUdpConnection?.send(content: data, completion: .contentProcessed({ _ in }))

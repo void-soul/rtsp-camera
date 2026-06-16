@@ -252,19 +252,20 @@ class StreamManager: NSObject, ObservableObject {
         print("[RTSPCamera] stopServer called")
         guard isServerRunning else { return }
 
+        // --- Immediate UI state update (main thread) ---
         rtspServer?.stop()
         rtspServer = nil
         isServerRunning = false
-        // Clear any lingering disconnect warning when streaming stops.
         clientDisconnected = false
+        streamUrl = ""
 
-        // Stop senders
+        // Stop senders — signals semaphores so blocked reader threads can unblock
         videoSender?.stop()
         videoSender = nil
         audioSender?.stop()
         audioSender = nil
 
-        // Stop frame readers
+        // Cancel frame readers
         videoReaderCancellation?.cancelled = true
         videoFrameReadTask?.cancel()
         videoFrameReadTask = nil
@@ -272,30 +273,32 @@ class StreamManager: NSObject, ObservableObject {
         audioFrameReadTask?.cancel()
         audioFrameReadTask = nil
 
-        // Stop encoders (only when server fully stops, not on client disconnect)
-        videoEncoder.stop()
-        audioEncoder.stop()
+        // --- Heavy cleanup off main thread ---
+        // VTCompressionSessionInvalidate, camera reconfiguration and encoder teardown
+        // can block for hundreds of ms if VideoToolbox callbacks are in flight.
+        // Doing this here keeps the UI responsive the instant user taps Stop.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
 
-        // Clear frame providers
-        videoFrameProvider.clear()
-        audioFrameProvider.clear()
+            self.videoEncoder.stop()
+            self.audioEncoder.stop()
 
-        stopFpsMonitor()
+            self.videoFrameProvider.clear()
+            self.audioFrameProvider.clear()
 
-        // Keep the camera capture session running so the preview stays visible after
-        // streaming stops (matches Android behavior). The capture session is only torn
-        // down when the app backgrounds/exits. We reconfigure it back to the user's
-        // chosen resolution/audio-off preview state.
-        let settings = SettingsManager.shared
-        cameraManager.configureSession(
-            width: settings.getWidth(),
-            height: settings.getHeight(),
-            fps: settings.fps,
-            audioEnabled: false // preview only — no audio needed when not streaming
-        )
-        cameraManager.start()
+            self.stopFpsMonitor()
 
-        streamUrl = ""
+            let settings = SettingsManager.shared
+            self.cameraManager.configureSession(
+                width: settings.getWidth(),
+                height: settings.getHeight(),
+                fps: settings.fps,
+                audioEnabled: false
+            )
+            self.cameraManager.start()
+
+            print("[RTSPCamera] stopServer background cleanup complete")
+        }
     }
     
     private var videoFrameReadTask: DispatchWorkItem?
