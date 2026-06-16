@@ -43,13 +43,13 @@ class SettingsManager(context: Context) {
 
     var gop: Int
         get() = try {
-            val v = prefs.getString("gop", "60")?.toInt() ?: 60
+            val v = prefs.getString("gop", "30")?.toInt() ?: 30
             // 兼容旧版本：旧版以秒存储(如2表示2秒)，新版以帧数存储(1-120)
             // 旧版典型值: 2,3 等(秒)，新版典型值: 1,5,10,15,...,120
             // 若值<=10且不是5的倍数(即1除外)，视为旧版秒数，按30fps换算
             if (v in 2..10 && v != 5 && v != 10) v * 30 else v
         } catch (e: Exception) {
-            prefs.getInt("gop", 60)
+            prefs.getInt("gop", 30)
         }
         set(value) = prefs.edit().putString("gop", value.toString()).apply()
 

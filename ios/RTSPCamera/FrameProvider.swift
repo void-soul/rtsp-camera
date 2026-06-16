@@ -1,5 +1,6 @@
 import Foundation
 import QuartzCore
+import os
 
 // MARK: - NativeFrame (Pre-allocated reusable buffer)
 class NativeFrame {
@@ -27,7 +28,7 @@ class VideoFrameProvider {
     private let queueCapacity: Int
     private var framePool = [NativeFrame]()
     private var filledQueue = [NativeFrame]()
-    private let lock = NSLock()
+    private var lock = os_unfair_lock()
     private let semaphore: DispatchSemaphore
 
     private(set) var totalDroppedFrames: Int = 0
@@ -50,14 +51,14 @@ class VideoFrameProvider {
     /// Allocate buffer pool lazily when streaming starts.
     /// Public entry point: acquires the lock then delegates to `prepareLocked()`.
     func prepare() {
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         prepareLocked()
     }
 
     /// Internal allocation routine that MUST be called while already holding `lock`.
     /// Split out so `obtainEmptyFrame()` can lazily prepare without re-entering the
-    /// non-reentrant `NSLock` (which previously deadlocked the encoder callback thread).
+    /// non-reentrant lock (which previously deadlocked the encoder callback thread).
     private func prepareLocked() {
         guard !isPrepared else { return }
         for _ in 0..<poolSize {
@@ -69,8 +70,8 @@ class VideoFrameProvider {
     private var obtainLogCount = 0
     /// Get an empty frame from the pool, or steal/recycle the oldest from the filledQueue if the pool is empty
     func obtainEmptyFrame() -> NativeFrame? {
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         if !isPrepared { prepareLocked() }
 
         if let frame = framePool.popLast() {
@@ -101,7 +102,7 @@ class VideoFrameProvider {
     private var addFrameCount = 0
     /// Add a filled frame to the bounded queue
     func addFrame(_ frame: NativeFrame) {
-        lock.lock()
+        os_unfair_lock_lock(&lock)
         addFrameCount += 1
         if addFrameCount <= 3 || addFrameCount % 90 == 0 {
             print("[RTSPCamera] VideoFrameProvider: addFrame #\(addFrameCount), len=\(frame.length), queue=\(filledQueue.count)/\(queueCapacity)")
@@ -121,7 +122,7 @@ class VideoFrameProvider {
             }
         }
         filledQueue.append(frame)
-        lock.unlock()
+        os_unfair_lock_unlock(&lock)
         semaphore.signal()
     }
 
@@ -129,28 +130,28 @@ class VideoFrameProvider {
     func getFrameBlocking(timeoutMs: Int) -> NativeFrame? {
         let result = semaphore.wait(timeout: .now() + .milliseconds(timeoutMs))
         guard result == .success else { return nil }
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         return filledQueue.isEmpty ? nil : filledQueue.removeFirst()
     }
 
     /// Return a frame to the pool
     func recycleFrame(_ frame: NativeFrame) {
-        lock.lock()
+        os_unfair_lock_lock(&lock)
         recycleFrameLocked(frame)
-        lock.unlock()
+        os_unfair_lock_unlock(&lock)
     }
 
     /// Drop all queued frames
     func clearFilledQueue() {
-        lock.lock()
+        os_unfair_lock_lock(&lock)
         for frame in filledQueue {
             frame.length = 0
             framePool.append(frame)
         }
         filledQueue.removeAll()
         lastKeyframeRequestTime = 0
-        lock.unlock()
+        os_unfair_lock_unlock(&lock)
     }
 
     func clear() {
@@ -158,10 +159,10 @@ class VideoFrameProvider {
     }
 
     func resetDroppedFrameStats() {
-        lock.lock()
+        os_unfair_lock_lock(&lock)
         totalDroppedFrames = 0
         lastKeyframeRequestTime = 0
-        lock.unlock()
+        os_unfair_lock_unlock(&lock)
     }
 
     // MARK: - SPS/PPS/VPS management
@@ -217,7 +218,7 @@ class AudioFrameProvider {
     private let queueCapacity = 100
     private var framePool = [NativeFrame]()
     private var filledQueue = [NativeFrame]()
-    private let lock = NSLock()
+    private var lock = os_unfair_lock()
     private let semaphore: DispatchSemaphore
 
     init() {
@@ -229,8 +230,8 @@ class AudioFrameProvider {
     }
 
     func obtainEmptyFrame() -> NativeFrame? {
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         if let frame = framePool.popLast() {
             return frame
         }
@@ -250,7 +251,7 @@ class AudioFrameProvider {
     }
 
     func addFrame(_ frame: NativeFrame) {
-        lock.lock()
+        os_unfair_lock_lock(&lock)
         if filledQueue.count >= queueCapacity {
             if let oldest = filledQueue.first {
                 recycleFrameLocked(oldest)
@@ -258,31 +259,31 @@ class AudioFrameProvider {
             }
         }
         filledQueue.append(frame)
-        lock.unlock()
+        os_unfair_lock_unlock(&lock)
         semaphore.signal()
     }
 
     func getFrameBlocking(timeoutMs: Int) -> NativeFrame? {
         let result = semaphore.wait(timeout: .now() + .milliseconds(timeoutMs))
         guard result == .success else { return nil }
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         return filledQueue.isEmpty ? nil : filledQueue.removeFirst()
     }
 
     func recycleFrame(_ frame: NativeFrame) {
-        lock.lock()
+        os_unfair_lock_lock(&lock)
         recycleFrameLocked(frame)
-        lock.unlock()
+        os_unfair_lock_unlock(&lock)
     }
 
     func clear() {
-        lock.lock()
+        os_unfair_lock_lock(&lock)
         for frame in filledQueue {
             frame.length = 0
             framePool.append(frame)
         }
         filledQueue.removeAll()
-        lock.unlock()
+        os_unfair_lock_unlock(&lock)
     }
 }

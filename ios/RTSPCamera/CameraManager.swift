@@ -194,9 +194,11 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
                 self.captureSession.startRunning()
             }
             
-            // Reset state trackers on main thread
+            // Reset state trackers on main thread — sync zoom to device minimum
+            // (0.5x on ultra-wide devices, 1.0x otherwise).
+            let minZ = self.cameraCaps.minZoom
             DispatchQueue.main.async {
-                self.zoomFactor = 1.0
+                self.zoomFactor = minZ
                 self.exposureBias = 0.0
                 self.isTorchOn = false
                 self.focusMode = .continuousAutoFocus

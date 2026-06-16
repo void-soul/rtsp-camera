@@ -50,6 +50,11 @@ class H264Encoder(
 
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFormat)
         format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate * 1000000)
+        // CBR: constant bitrate avoids I-frame burst spikes that cause UDP packet loss
+        // and PotPlayer buffering. The hardware encoder still has some burst tolerance
+        // due to the internal CPB, but the average rate is tightly constrained.
+        format.setInteger(MediaFormat.KEY_BITRATE_MODE,
+            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
         format.setInteger(MediaFormat.KEY_FRAME_RATE, framerate)
         val iInterval = if (gop > 0) (gop.toFloat() / framerate).coerceAtLeast(1f).toInt() else 1
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, iInterval)

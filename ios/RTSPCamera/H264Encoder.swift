@@ -2,10 +2,11 @@ import Foundation
 import VideoToolbox
 import CoreMedia
 import QuartzCore
+import os
 
 class H264Encoder {
     private var session: VTCompressionSession?
-    let lock = NSLock()
+    var lock = os_unfair_lock()
     
     fileprivate var callback: ((Data, Bool, Int64) -> Void)?
     
@@ -14,20 +15,20 @@ class H264Encoder {
     fileprivate var _vps: Data?
     
     var sps: Data? {
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         return _sps
     }
     
     var pps: Data? {
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         return _pps
     }
     
     var vps: Data? {
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         return _vps
     }
     
@@ -36,8 +37,8 @@ class H264Encoder {
     fileprivate var _currentCodec: String = ""
     
     var currentCodec: String {
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         return _currentCodec
     }
 
@@ -47,8 +48,8 @@ class H264Encoder {
     fileprivate var _currentFps: Double = 0.0
     
     var currentFps: Double {
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         return _currentFps
     }
 
@@ -56,28 +57,28 @@ class H264Encoder {
     private var _forceKeyframe: Bool = false
 
     func requestKeyframe() {
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         _forceKeyframe = true
     }
     
     func updateDynamicBitrate(bps: Int) {
-        lock.lock()
+        os_unfair_lock_lock(&lock)
         let activeSession = session
-        lock.unlock()
+        os_unfair_lock_unlock(&lock)
         guard let session = activeSession else { return }
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bps as CFNumber)
     }
     
     func setCallback(_ callback: @escaping (Data, Bool, Int64) -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         self.callback = callback
     }
     
     func configure(width: Int32, height: Int32, codec: String, fps: Int, bitrateMbps: Int, gop: Int) {
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         
         if session != nil && currentWidth == width && currentHeight == height && _currentCodec == codec {
             // Already configured for same dimensions/codec. We can adjust bitrate/FPS/GOP dynamically.
@@ -166,9 +167,9 @@ class H264Encoder {
     }
     
     func encode(pixelBuffer: CVPixelBuffer, timestampUs: Int64) {
-        lock.lock()
+        os_unfair_lock_lock(&lock)
         guard let session = session else {
-            lock.unlock()
+            os_unfair_lock_unlock(&lock)
             return
         }
         
@@ -182,7 +183,7 @@ class H264Encoder {
             let props: [CFString: Any] = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue]
             frameProperties = props as CFDictionary
         }
-        lock.unlock()
+        os_unfair_lock_unlock(&lock)
         
         let status = VTCompressionSessionEncodeFrame(
             session,
@@ -200,8 +201,8 @@ class H264Encoder {
     }
     
     func stop() {
-        lock.lock()
-        defer { lock.unlock() }
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
         stopLocked()
     }
     
@@ -288,11 +289,11 @@ private let compressionCallback: VTCompressionOutputCallback = { (
                 
                 if vpsStatus == noErr, spsStatus == noErr, ppsStatus == noErr,
                    let vpsPtr = vpsPointer, let spsPtr = spsPointer, let ppsPtr = ppsPointer {
-                    encoder.lock.lock()
+                    os_unfair_lock_lock(&encoder.lock)
                     encoder._vps = Data(bytes: vpsPtr, count: vpsSize)
                     encoder._sps = Data(bytes: spsPtr, count: spsSize)
                     encoder._pps = Data(bytes: ppsPtr, count: ppsSize)
-                    encoder.lock.unlock()
+                    os_unfair_lock_unlock(&encoder.lock)
                 }
             }
         } else {
@@ -315,10 +316,10 @@ private let compressionCallback: VTCompressionOutputCallback = { (
             
             if spsStatus == noErr, ppsStatus == noErr,
                let spsPtr = spsPointer, let ppsPtr = ppsPointer {
-                encoder.lock.lock()
+                os_unfair_lock_lock(&encoder.lock)
                 encoder._sps = Data(bytes: spsPtr, count: spsSize)
                 encoder._pps = Data(bytes: ppsPtr, count: ppsSize)
-                encoder.lock.unlock()
+                os_unfair_lock_unlock(&encoder.lock)
             }
         }
     }
@@ -349,12 +350,12 @@ private let compressionCallback: VTCompressionOutputCallback = { (
     let startCode = Data([0x00, 0x00, 0x00, 0x01])
     
     if isKeyFrame {
-        encoder.lock.lock()
+        os_unfair_lock_lock(&encoder.lock)
         let localSps = encoder._sps
         let localPps = encoder._pps
         let localVps = encoder._vps
         let isH265 = (encoder._currentCodec.lowercased() == "h265")
-        encoder.lock.unlock()
+        os_unfair_lock_unlock(&encoder.lock)
         
         if isH265 {
             if let vps = localVps, let sps = localSps, let pps = localPps {
@@ -391,7 +392,7 @@ private let compressionCallback: VTCompressionOutputCallback = { (
     }
     
     // Update FPS counter
-    encoder.lock.lock()
+    os_unfair_lock_lock(&encoder.lock)
     encoder.frameCount += 1
     let now = CACurrentMediaTime()
     if encoder.lastFpsTimestamp == 0 {
@@ -405,7 +406,7 @@ private let compressionCallback: VTCompressionOutputCallback = { (
     }
     let cb = encoder.callback
     let totalFrames = encoder.frameCount
-    encoder.lock.unlock()
+    os_unfair_lock_unlock(&encoder.lock)
 
     // Log every 30 frames (~1/sec at 30fps) to confirm encoder is producing output
     if totalFrames % 30 == 0 {

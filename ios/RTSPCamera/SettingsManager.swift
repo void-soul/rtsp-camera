@@ -23,7 +23,7 @@ class SettingsManager {
     }
     
     var gop: Int {
-        get { defaults.integer(forKey: "gop") == 0 ? 60 : defaults.integer(forKey: "gop") }
+        get { defaults.integer(forKey: "gop") == 0 ? 30 : defaults.integer(forKey: "gop") }
         set { defaults.set(newValue, forKey: "gop") }
     }
     

@@ -187,6 +187,9 @@ struct ContentView: View {
         ["None", "B&W", "VIVID", "WARM", "COOL"]
     }
 
+    private var minZoom: CGFloat { cameraManager.cameraCaps.minZoom }
+    private var maxZoom: CGFloat { cameraManager.cameraCaps.maxZoom }
+
     private let bitrates = ["5", "10", "15", "20", "25", "30", "35", "40", "50", "60"]
     private let fpsList = ["120", "60", "30", "24"]
     private let gopList = ["1", "5", "10", "15", "20", "25", "30", "40", "50", "60", "80", "100", "120"]
@@ -387,7 +390,7 @@ struct ContentView: View {
             }
             VerticalDivider()
             ParamMenu(title: "GOP", options: gopList, selection: $gop) { val in
-                SettingsManager.shared.gop = Int(val) ?? 60
+                SettingsManager.shared.gop = Int(val) ?? 30
             }
             VerticalDivider()
             ParamMenu(title: "CODEC", options: codecs.map { $0.uppercased() },
@@ -523,7 +526,7 @@ struct ContentView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 0) {
-            ControlButton(label: "ZOOM", value: String(format: "%.1fx", localZoom),
+            ControlButton(label: "ZOOM", value: String(format: "%.1fx", cameraManager.zoomFactor),
                           isActive: activeControl == "zoom") {
                 toggleControl("zoom")
             }
@@ -718,13 +721,13 @@ struct ContentView: View {
     private var rulerSlider: some View {
         HStack(spacing: 8) {
             if activeControl == "zoom" {
-                Text("1x")
+                Text(String(format: "%.1fx", minZoom))
                     .font(.caption2).foregroundColor(.white.opacity(0.6))
-                Slider(value: $localZoom, in: 1...min(10, cameraManager.zoomFactor > 1 ? 10 : 10))
+                Slider(value: $localZoom, in: minZoom...maxZoom)
                     .onChange(of: localZoom) { cameraManager.setZoom($0) }
-                Text(String(format: "%.0fx", localZoom))
+                Text(String(format: "%.1fx", localZoom))
                     .font(.caption2).foregroundColor(.white.opacity(0.6))
-                    .frame(width: 28)
+                    .frame(width: 36)
             } else if activeControl == "ev" {
                 Text("-3")
                     .font(.caption2).foregroundColor(.white.opacity(0.6))
@@ -957,6 +960,12 @@ struct ContentView: View {
                 activeControl = nil
             } else {
                 activeControl = name
+                // Sync local slider state from camera before showing slider
+                switch name {
+                case "zoom": localZoom = cameraManager.zoomFactor
+                case "ev":   localExposure = cameraManager.exposureBias
+                default: break
+                }
             }
         }
     }
@@ -1015,7 +1024,7 @@ struct ContentView: View {
         s.resolution = resolution
         s.fps = Int(fps) ?? 30
         s.bitrate = Int(bitrate) ?? 30
-        s.gop = Int(gop) ?? 60
+        s.gop = Int(gop) ?? 30
         s.videoCodec = codec
         s.audioEnabled = audioEnabled
         streamManager.startServer()

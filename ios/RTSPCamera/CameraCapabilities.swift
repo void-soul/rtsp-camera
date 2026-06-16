@@ -20,6 +20,10 @@ class CameraCapabilities {
     private(set) var supportedWbModes: Set<AVCaptureDevice.WhiteBalanceMode> = []
     private(set) var supportedWbPresets: Set<String> = []
 
+    /// Device zoom range (e.g. 0.5x on devices with ultra-wide lens, 1.0x otherwise).
+    let minZoom: CGFloat
+    let maxZoom: CGFloat
+
     /// All possible resolutions the app can offer, in the same order as Android's
     /// `arrays.xml`. Each is validated against the device's activeFormat list.
     private static let candidateResolutions: [(Int, Int, String, String)] = [
@@ -34,6 +38,8 @@ class CameraCapabilities {
     ]
 
     init(device: AVCaptureDevice) {
+        self.minZoom = device.minAvailableVideoZoomFactor
+        self.maxZoom = min(device.maxAvailableVideoZoomFactor, 10.0)
         resolveResolutions(device: device)
         resolveWhiteBalance(device: device)
     }
