@@ -337,9 +337,7 @@ class RTPSender {
             // Pre-reserve a typical frame's worth of capacity (RTP payload + per-fragment
             // interleaved headers) so the batch append loop does not trigger repeated
             // Data reallocations/copies while assembling the ~32 fragments of a P-frame.
-            if self.tcpBatchData.capacity < 80 * 1024 {
-                self.tcpBatchData.reserveCapacity(80 * 1024)
-            }
+            self.tcpBatchData.reserveCapacity(80 * 1024)
 
             // Maintain timestamp (relative to the first frame of this session)
             let startPts = self.sharedState.getOrSetStartPts(timestampUs)
