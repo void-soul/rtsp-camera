@@ -1,71 +1,168 @@
-# Android 原生高性能 RTSP 摄像头推流应用
+# RTSP Camera
 
-基于 Kotlin 开发的高性能 Android RTSP 摄像头应用，旨在将 Android 手机转换为专业级的 RTSP 流媒体服务器。本项目通过原生 **Camera2 API** 和 **MediaCodec 硬件编码**，实现了极低延迟、高稳定性的推流性能，最高支持 **4K/60FPS**（取决于硬件支持）。
+A cross-platform native RTSP camera streaming app that turns your phone into a high-performance RTSP server. Supports up to **4K/60FPS** with hardware-accelerated **H.264/H.265** encoding and real-time camera controls.
 
-## 项目亮点
+- **Android** — Kotlin, `com.gld.rtsp_camera`
+- **iOS** — Swift, `RTSPCamera` (v1.0.1)
 
-- **全原生架构**：放弃了 Flutter 采集方案，采用纯 Kotlin 开发，消除了 GC 带来的掉帧和内存压力。
-- **Zero-Copy 数据链路**：采用 `Camera2 -> Surface -> MediaCodec` 的零拷贝硬件链路。图像数据直接在 GPU 显存中传输，CPU 负载极低。
-- **专业级控制**：提供类似专业相机的对焦、曝光、缩放手动控制，并支持硬件防抖（OIS/EIS）。
-- **实时监测**：内置轻量级 RTSP 服务器，支持多客户端同时接入，并能实时在界面显示已连接的客户端地址。
+## Highlights
 
-## 核心功能
+- **Fully native** — No cross-platform frameworks. Kotlin on Android, Swift on iOS. Zero GC pressure, minimal CPU overhead.
+- **Zero-copy pipeline** — `Camera → Surface → Hardware Encoder` on Android; `AVCaptureSession → CVPixelBuffer → VideoToolbox` on iOS. Pixel data stays in dedicated hardware buffers.
+- **H.264 & H.265** — Both codecs supported on both platforms with hardware acceleration.
+- **TCP & UDP** — Automatic mode selection via RTSP `Transport` negotiation. TCP interleaved with per-packet micro-pacing for smooth delivery.
+- **Adaptive Bitrate** — RTCP-based congestion detection drops bitrate to 75% on >5% packet loss, recovers by 10% after 30s of zero loss.
+- **Real-time performance HUD** — FPS, ABR, CPU, memory, network throughput, battery, frame counters, and packet loss all visible during streaming.
 
-### 1. 相机控制
-- **手动/自动对焦**：支持手动滑块对焦及一键切换回自动对焦（AF）。
-- **曝光调节**：支持实时曝光补偿（亮度）调节。
-- **缩放系统**：支持平滑缩放及 1x、广角快切按钮。
-- **闪光灯/手电筒**：推流过程中可实时开启/关闭物理补光灯。
-- **场景与滤镜**：支持硬件级场景模式（运动、夜景、人像等）和硬件滤镜（黑白、复古、反色等），通过底部菜单快速切换。
+## Core Features
 
-### 2. 推流配置
-- **分辨率控制**：支持 4K、2K、1080p、720p 等多档分辨率。
-- **码率设置**：支持以 Mbps 为单位的动态码率设置（建议 10-60 Mbps）。
-- **帧率 (FPS)**：最高支持 60/120 FPS（取决于设备物理上限）。
-- **GOP 调节**：可自定义 I 帧间隔。
+### Camera Controls
 
-### 3. RTSP 服务
-- **标准协议**：支持完整的 RTSP 状态机（OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN）。
-- **客户端跟踪**：实时在界面展示当前所有连接的客户端 IP 地址。
-- **前台服务**：采用 Android 前台服务，确保推流在后台或锁屏状态下依然稳定运行。
+| Feature | Android | iOS |
+|---------|---------|-----|
+| Resolution | 4K / 1080p / 720p | 4K / 1080p / 720p |
+| Frame rate | Up to device max (120) | Up to device max |
+| Manual zoom | 1x–10x slider | 1x–10x slider |
+| Exposure bias | −3 to +3 EV | −3 to +3 EV |
+| Manual focus | Focus distance slider + AF toggle | Lens position slider + AF toggle |
+| Torch / Flash | Toggle during streaming | Toggle during streaming |
+| Camera flip | Front/rear switch | Front/rear switch |
+| White balance | AUTO, Incandescent, Fluorescent, Daylight, Cloudy | Auto (via AVCaptureDevice) |
+| Color filters | MONO, NEGATIVE, SOLARIZE, SEPIA, POSTERIZE | Planned (tracked, not applied) |
+| Edge enhancement | Hardware sharpness control | N/A |
+| Distortion correction | Camera2 hardware mode | N/A |
+| Stabilization | OIS + EIS (independent toggles) | Auto OIS/EIS (combined) |
 
-### 4. 界面与交互
-- **沉浸式预览**：全屏相机预览，控件分布在屏幕四周，中心区域开阔。
-- **UI 隐藏模式**：一键切换“纯净视图”，隐藏所有滑动条和按钮，仅保留推流开关。
-- **侧边控制**：对焦与亮度滑块采用横向并排布局，避免遮挡信息区。
+### Streaming Configuration
 
-## 系统架构
+- **GOP control** — Adjustable keyframe interval (1–120 frames)
+- **Dynamic bitrate** — 5–60 Mbps, adjustable mid-stream without restart
+- **Codec selection** — H.264 or H.265, configurable before starting
+- **Audio** — AAC-LC 44.1 kHz (optional, disable before starting)
+- **Network** — Configurable RTSP port and path
+- **Language** — English / Chinese / Auto (runtime switching, no restart)
 
-```mermaid
-graph TD
-    A[Camera2 API] -->|Surface| B[MediaCodec Hardware Encoder]
-    B -->|H.264 NALUs| C[H264FrameProvider]
-    C -->|RTP Packetization| D[RTPSender]
-    D -->|UDP| E[RTSP Client (VLC/PotPlayer)]
-    F[SimpleRTSPServer] -->|SDP/Setup| E
-    G[SettingsManager] -->|Config| A
-    G -->|Config| B
+### RTSP Server
+
+- Full RTSP 1.0 state machine: `OPTIONS → DESCRIBE → SETUP → PLAY → TEARDOWN`
+- SDP generation with extracted SPS/PPS/VPS parameter sets
+- Single-client mode (453 Not Enough Bandwidth for additional clients)
+- Client IP display and disconnect alert with flashing red border
+- TCP interleaved mode (`$|ch|len`) and UDP unicast mode
+
+## Architecture
+
+```
+Camera API  →  Hardware Encoder  →  Frame Provider  →  RTP Sender  →  UDP/TCP
+   ↑                ↑                    ↑                  ↑
+   |          SettingsManager       Frame Pool        RTCP Sender (SR/RR)
+   |                                     |
+Settings UI                        Low-latency Queue (capacity 5)
 ```
 
-## 技术实现细节
+### Layer Responsibilities
 
-- **图像采集**：使用 `CameraCharacteristics` 动态探测硬件极限参数（FPS 范围、ISO 范围等）。
-- **防抖控制**：在设置中可开启 **OIS（光学防抖）**、**EIS（电子防抖）** 及 **畸变矫正**。
-- **边缘增强**：支持硬件级锐度调节（Edge Enhancement）。
-- **编码器**：优先调用厂商优化后的硬件编码器（如 `c2.qti.avc.encoder`）。
+**Android** — `Camera2 → Surface → MediaCodec → H264FrameProvider → RTPSender → Client`
 
-## 如何开始
+**iOS** — `AVCaptureSession → CVPixelBuffer → VTCompressionSession → VideoFrameProvider → RTPSender → Client`
 
-1. **环境要求**：
-   - Android Studio Jellyfish 或更高版本。
-   - Android 9.0 (API 28) 或更高版本设备（推荐高通骁龙 8 系列）。
-2. **安装运行**：
-   - 克隆仓库，在 Android Studio 中打开 `android` 目录。
-   - 编译并安装到真机。
-3. **连接测试**：
-   - 确保手机与播放端在同一局域网。
-   - 开启推流，在 VLC 或 PotPlayer 中输入界面显示的 RTSP 地址。
+### Key Design Patterns
 
-## 许可证
+- **Frame pool** — Pre-allocated buffer pools avoid GC/ARC pressure during streaming (10 × 2MB video buffers, reusable NALU arrays)
+- **Low-latency queue** — Frame provider uses capacity-5 blocking queue (~167 ms at 30 FPS); overflow triggers keyframe request
+- **FPS auto-detection** — Automatically detects actual camera FPS; restarts encoder if below target to fix SPS VUI timing
+- **Dynamic parameters** — Bitrate, FPS, GOP adjustable during active stream without restart
+- **Frame-level backpressure** — `DispatchSemaphore(value: 4)` on iOS; `BlockingQueue` + synchronous socket writes on Android
+- **TCP micro-pacing** — Per-packet 80 µs spacing to prevent burst delivery over NWConnection (iOS)
 
-本项目仅供学习与研究使用。
+## Getting Started
+
+### Android
+
+**Requirements:** Android Studio, JDK 17, Android 8.0+ (API 24) device
+
+```bash
+cd android
+./gradlew.bat assembleDebug          # Build debug APK
+./gradlew.bat :app:assembleRelease   # Build release APK (ProGuard + shrink)
+```
+
+Build output: `android/app/build/outputs/apk/`
+
+### iOS
+
+**Requirements:** Xcode 15+, iOS 13+ device
+
+```bash
+xcodebuild -project ios/RTSPCamera.xcodeproj \
+  -scheme RTSPCamera \
+  -sdk iphonesimulator \
+  -configuration Debug build
+```
+
+### Testing the Stream
+
+1. Connect your phone and player (VLC, PotPlayer, ffplay) to the same local network
+2. Tap the start button — the RTSP URL appears in the top bar
+3. Open the URL in your player: `rtsp://<phone-ip>:8554/live`
+
+## Build Configuration
+
+| | Android | iOS |
+|---|---------|-----|
+| Language | Kotlin 2.0.21 | Swift 5 |
+| Build system | Gradle 8.13 (Groovy DSL) | Xcode project |
+| AGP | 8.13.2 | — |
+| Min SDK / Target | API 24 / 35 | iOS 13 |
+| Compile SDK | 36 | — |
+| JVM target | 17 | — |
+| ABI filters | armeabi-v7a, arm64-v8a | arm64 |
+| ProGuard | Enabled (release) | N/A |
+| Page alignment | 16 KB (Android 15+) | N/A |
+
+## Testing
+
+### Android (JUnit 4)
+
+```bash
+cd android
+./gradlew.bat :app:testDebugUnitTest
+```
+
+Test files:
+- `RTPSenderTest.kt` — NAL unit parsing, FU-A fragmentation, RTP packetization
+- `H264EncoderTest.kt` — Color conversion (YUV ↔ NV12)
+- `SettingsManagerTest.kt` — SharedPreferences migration logic
+- `H264FrameProviderTest.kt` — Frame pool allocation and SPS/PPS handling
+- `AudioFrameProviderTest.kt` — Audio buffer pool
+
+### iOS
+
+No unit tests configured yet.
+
+## CI/CD
+
+GitHub Actions (`.github/workflows/build.yml`):
+- Triggers on push to `main`/`master`, pull requests, and manual dispatch
+- **Android**: Builds release APK on `ubuntu-latest`
+- **iOS**: Builds unsigned IPA on `macos-14` with Xcode 15.4
+- **Release**: Creates GitHub release with APK and IPA artifacts on push to main
+
+## Platform Differences
+
+| Aspect | Android | iOS |
+|--------|---------|-----|
+| Camera API | CameraX + Camera2 interop | AVCaptureSession |
+| Encoder | MediaCodec (Surface input) | VideoToolbox (CVPixelBuffer input) |
+| Encoder input | Zero-copy Surface | CVPixelBuffer from AVCaptureVideoDataOutput |
+| UDP socket | `java.net.DatagramSocket` | `Network.framework NWConnection` |
+| TCP pacing | Batch buffer per frame | Per-packet 80 µs micro-pacing |
+| Backpressure | Implicit (synchronous write) | Explicit (semaphore-based frame throttling) |
+| Background streaming | Foreground service + WakeLock | Audio background mode |
+| Color filters | Hardware `CONTROL_EFFECT_MODE` | Not available (tracked in UI) |
+| Stabilization | OIS + EIS independent toggles | Combined `.auto` mode |
+| UI framework | XML layouts + programmatic | SwiftUI |
+
+## License
+
+This project is for learning and research purposes.
