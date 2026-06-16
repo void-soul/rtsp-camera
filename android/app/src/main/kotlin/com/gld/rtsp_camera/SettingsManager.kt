@@ -73,9 +73,9 @@ class SettingsManager(context: Context) {
         get() = prefs.getString("rtsp_path", "/live") ?: "/live"
         set(value) = prefs.edit().putString("rtsp_path", value).apply()
 
-    // 编码器类型: h264 / h265
+    // 编码器类型: h264 / h265 (h265为不稳定实验特性，默认h264)
     var videoCodec: String
-        get() = prefs.getString("video_codec", "h265") ?: "h264"
+        get() = prefs.getString("video_codec", "h264") ?: "h264"
         set(value) = prefs.edit().putString("video_codec", value).apply()
 
     // 声音与渲染开关
