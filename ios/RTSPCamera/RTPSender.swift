@@ -183,7 +183,6 @@ class RTPSender {
     
     private var rtcpSender: RTCPSender?
     private var sentCodecConfig = false
-    private var tcpBatchData = Data()
     private var isBatching = false
     private let maxPacketSize = 1400
     private var debugFrameCount = 0
@@ -364,11 +363,8 @@ class RTPSender {
             if self.isStoppedFlag() { self.tcpFrameSlot.signal(); return }
 
             self.isBatching = true
-            self.tcpBatchData.removeAll(keepingCapacity: true)
-            // Pre-reserve a typical frame's worth of capacity (RTP payload + per-fragment
-            // interleaved headers) so the batch append loop does not trigger repeated
-            // Data reallocations/copies while assembling the ~32 fragments of a P-frame.
-            self.tcpBatchData.reserveCapacity(80 * 1024)
+            // Note: isBatching is only used as a hint in sendPacket() for inter-packet
+            // micro-pacing; we no longer collect packets into a batch buffer.
 
             // Maintain timestamp (relative to the first frame of this session)
             let startPts = self.sharedState.getOrSetStartPts(timestampUs)
@@ -423,7 +419,8 @@ class RTPSender {
             }
 
             self.isBatching = false
-            self.flushTcpBatch()
+            // Each packet was already sent individually via sendPacket() → sendRawTcp()
+            // with 80 μs inter-packet pacing; no batch flush needed.
 
             self.rtcpSender?.updateRtpTimestamp(self.timestamp)
 
@@ -666,24 +663,29 @@ class RTPSender {
     
     private func sendPacket(data: Data) {
         if isTcp {
-            // Write the TCP Interleaved Frame directly into the batch buffer when batching,
-            // avoiding the intermediate `rtpHeader + data` allocation+copy per RTP fragment
-            // (a large P-frame is ~32 fragments, so this saves ~32 Data objects per frame).
+            // Build and immediately send each RTP packet as an individual TCP
+            // interleaved frame (no per-frame batching).  This matches Android's
+            // OutputStream.write()-per-packet behaviour where each write() is a
+            // synchronous syscall that the kernel paces onto the wire.
+            // Without this, batching an entire I-frame (55 pkts / ~77 KB) into one
+            // NWConnection.send() creates a burst that PotPlayer absorbs into its
+            // render queue (queue=5–6), causing stuttering.
+            var tcpFrame = Data(capacity: 4 + data.count)
+            tcpFrame.append(0x24)                               // Magic '$'
+            tcpFrame.append(UInt8(tcpChannel))                  // Interleaved channel
+            tcpFrame.append(UInt8((data.count >> 8) & 0xFF))    // Length hi
+            tcpFrame.append(UInt8(data.count & 0xFF))           // Length lo
+            tcpFrame.append(data)
+            sendRawTcp(tcpFrame)
+
+            // Micro-pacing between packets within a single video frame so they are
+            // not dispatched to NWConnection in a tight zero-delay loop, which would
+            // cause NWConnection to coalesce them into one large burst on the wire.
+            // 80 μs × ~25 packets (P-frame) ≈ 2 ms spread — well under the 33 ms
+            // frame period but enough to give the kernel/NWConnection time to push
+            // earlier packets out before the next arrives.
             if isBatching {
-                tcpBatchData.append(0x24)                              // Magic '$'
-                tcpBatchData.append(UInt8(tcpChannel))
-                tcpBatchData.append(UInt8((data.count >> 8) & 0xFF))
-                tcpBatchData.append(UInt8(data.count & 0xFF))
-                tcpBatchData.append(data)
-            } else {
-                // Non-batch path (audio / codec config): build a single interleaved frame.
-                var tcpFrame = Data(capacity: 4 + data.count)
-                tcpFrame.append(0x24)
-                tcpFrame.append(UInt8(tcpChannel))
-                tcpFrame.append(UInt8((data.count >> 8) & 0xFF))
-                tcpFrame.append(UInt8(data.count & 0xFF))
-                tcpFrame.append(data)
-                sendRawTcp(tcpFrame)
+                usleep(80)
             }
         } else {
             // Write UDP
@@ -720,16 +722,6 @@ class RTPSender {
                     print("[RTSPCamera] \(self?.codec ?? "") TCP send #\(count) succeeded")
                 }
             }))
-        }
-    }
-
-    private func flushTcpBatch() {
-        if isTcp && !tcpBatchData.isEmpty {
-            if debugFrameCount <= 2 {
-                print("[RTSPCamera] RTPSender \(codec) flushTcpBatch: \(tcpBatchData.count) bytes")
-            }
-            sendRawTcp(tcpBatchData)
-            tcpBatchData.removeAll(keepingCapacity: true)
         }
     }
 }
