@@ -52,19 +52,6 @@ class SettingsManager {
         set { defaults.set(newValue, forKey: "previewEnabled") }
     }
     
-    var language: String {
-        get { defaults.string(forKey: "language") ?? "auto" }
-        set { defaults.set(newValue, forKey: "language") }
-    }
-
-    /// Resolve "auto" → first preferredLanguage matching zh/en → "en".
-    var resolvedLanguage: String {
-        if language != "auto" { return language }
-        let pref = Locale.preferredLanguages.first ?? "en"
-        if pref.hasPrefix("zh") { return "zh" }
-        return "en"
-    }
-
     var perfMonitorEnabled: Bool {
         get { defaults.bool(forKey: "perfMonitorEnabled") }
         set { defaults.set(newValue, forKey: "perfMonitorEnabled") }
