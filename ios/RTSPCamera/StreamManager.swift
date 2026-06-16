@@ -253,6 +253,14 @@ class StreamManager: NSObject, ObservableObject {
         guard isServerRunning else { return }
 
         // --- Immediate UI state update (main thread) ---
+        // Explicitly clear client-connected state BEFORE tearing down the server.
+        // stop() → close() → connection.cancel() triggers async handleDisconnect()
+        // which calls clearSession() → onClientChange?(nil). But we are about to
+        // null out rtspServer, and the session only has a weak ref to it — if the
+        // weak ref goes nil before the async callback fires, isClientConnected
+        // never gets cleared and the RES dropdown stays disabled forever.
+        isClientConnected = false
+        clientIp = nil
         rtspServer?.stop()
         rtspServer = nil
         isServerRunning = false
