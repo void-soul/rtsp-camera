@@ -176,7 +176,7 @@ class RTPSender {
     /// queue, which stops sendVideoFrame from signalling its per-frame semaphore,
     /// which finally propagates backpressure to the FrameReader → FrameProvider chain.
     /// This matches Android's natural backpressure from blocking OutputStream.write().
-    static let tcpWriteSlot = DispatchSemaphore(value: 6)
+    static let tcpWriteSlot = DispatchSemaphore(value: 4)
 
     /// Set true when the sender is stopped or its connection is known to be dead.
     /// Checked at the entry of sendVideoFrame/sendAudioFrame to drop work early instead
@@ -197,14 +197,7 @@ class RTPSender {
     private var debugFrameCount = 0
     private var debugByteCount = 0
 
-    /// Bounded backpressure: at most N frames may be queued on the sender's serial
-    /// queue at once.  When the semaphore hits zero, sendVideoFrame blocks its caller
-    /// (the FrameReader), which in turn lets the bounded FrameProvider fill up and
-    /// drop frames at the source — the same natural backpressure chain Android gets
-    /// from blocking OutputStream.write().  A value of 1 serialises and adds latency
-    /// (the original ~14 s bug); a value of ~3 pipelines just enough to keep the wire
-    /// busy without multi-second buffering inside NWConnection.
-    private let tcpSendSlot = DispatchSemaphore(value: 3)
+
 
     // Config params
     private let isH265: Bool
@@ -315,11 +308,10 @@ class RTPSender {
         isStopped = true
         stopLock.unlock()
 
-        // Unblock any threads waiting on the backpressure semaphores (up to the slot
+        // Unblock any threads waiting on the backpressure semaphore (up to the slot
         // depth). Each unblocked thread will see isStopped==true, signal back, and
         // return — so the semaphore balance stays correct.
-        for _ in 0..<3 { tcpSendSlot.signal() }
-        for _ in 0..<6 { RTPSender.tcpWriteSlot.signal() }
+        for _ in 0..<4 { RTPSender.tcpWriteSlot.signal() }
 
         queue.async { [weak self] in
             guard let self = self else { return }
@@ -353,13 +345,9 @@ class RTPSender {
         // Drop work early if this sender has been stopped (client disconnect / teardown).
         if isStoppedFlag() { return }
 
-        // Backpressure: wait for a slot in the bounded pipeline.
-        tcpSendSlot.wait()
-        if isStoppedFlag() { tcpSendSlot.signal(); return }
-
         queue.async { [weak self] in
             guard let self = self else { return }
-            if self.isStoppedFlag() { self.tcpSendSlot.signal(); return }
+            if self.isStoppedFlag() { return }
 
             self.isBatching = true
             self.tcpBatchData.removeAll(keepingCapacity: true)
@@ -429,8 +417,6 @@ class RTPSender {
             if !self.isTcp && packetCount > 10 {
                 usleep(500)
             }
-
-            self.tcpSendSlot.signal()
         }
     }
     
@@ -438,12 +424,9 @@ class RTPSender {
         // Drop work early if this sender has been stopped (client disconnect / teardown).
         if isStoppedFlag() { return }
 
-        tcpSendSlot.wait()
-        if isStoppedFlag() { tcpSendSlot.signal(); return }
-
         queue.async { [weak self] in
             guard let self = self else { return }
-            if self.isStoppedFlag() { self.tcpSendSlot.signal(); return }
+            if self.isStoppedFlag() { return }
 
             // Maintain timestamp
             let startPts = self.sharedState.getOrSetStartPts(timestampUs)
@@ -477,8 +460,6 @@ class RTPSender {
             
             self.sendPacket(data: rtpBuffer)
             self.rtcpSender?.updateRtpTimestamp(self.timestamp)
-
-            self.tcpSendSlot.signal()
         }
     }
     
@@ -694,18 +675,20 @@ class RTPSender {
         if count <= 3 {
             print("[RTSPCamera] RTPSender TCP send #\(count): \(data.count) bytes, connection=\(tcpConnection != nil ? "valid" : "nil")")
         }
-        // Limit the number of pending write work-items on the shared serial queue.
+        // Limit the number of pending TCP writes on the shared serial queue.
         // When the slot is exhausted the senderʼs own serial queue blocks here,
         // which cascades backpressure up to the FrameReader → FrameProvider chain.
-        // Signal happens inside the async block — after the write is dispatched to
-        // NWConnection, not after the TCP ACK — so we cap pipeline depth without
-        // accumulating the per-frame latency that a contentProcessed callback would.
+        // Signal happens inside contentProcessed (after NWConnection confirms
+        // delivery), so the backpressure reflects the real network drain rate —
+        // the mechanism that originally solved PotPlayer buffering in b57f8c0.
         RTPSender.tcpWriteSlot.wait()
         if isStoppedFlag() { RTPSender.tcpWriteSlot.signal(); return }
 
         RTPSender.sharedTcpWriteQueue.async { [weak self] in
-            defer { RTPSender.tcpWriteSlot.signal() }
-            guard let self = self, !self.isStoppedFlag() else { return }
+            guard let self = self, !self.isStoppedFlag() else {
+                RTPSender.tcpWriteSlot.signal()
+                return
+            }
             self.tcpConnection?.send(content: data, completion: .contentProcessed({ [weak self] error in
                 if let error = error {
                     print("[RTSPCamera] \(self?.codec ?? "") TCP send error: \(error)")
@@ -715,6 +698,9 @@ class RTPSender {
                 } else if count <= 3 {
                     print("[RTSPCamera] \(self?.codec ?? "") TCP send #\(count) succeeded")
                 }
+                // Release the backpressure slot once the write has been delivered
+                // to the kernel/network (contentProcessed), not just dispatched.
+                RTPSender.tcpWriteSlot.signal()
             }))
         }
     }
