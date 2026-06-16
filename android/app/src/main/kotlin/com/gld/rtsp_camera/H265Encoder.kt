@@ -19,6 +19,7 @@ class H265Encoder(
     private var encoder: MediaCodec? = null
     private val running = AtomicBoolean(false)
     private var drainThread: Thread? = null
+    private val encoderLock = Any() // protects encoder lifecycle (start/restart/release vs requestSyncFrame/updateBitrate)
     private var selectedColorFormat = 0
     private var inputSurface: android.view.Surface? = null
 
@@ -243,8 +244,10 @@ class H265Encoder(
     }
 
     fun updateBitrate(newBitrateMbps: Int) {
-        val enc = encoder ?: return
         if (!running.get()) return
+        val enc: MediaCodec?
+        synchronized(encoderLock) { enc = encoder }
+        if (enc == null) return
         try {
             val params = android.os.Bundle()
             params.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, newBitrateMbps * 1000000)
@@ -256,8 +259,10 @@ class H265Encoder(
     }
 
     fun requestSyncFrame() {
-        val enc = encoder ?: return
         if (!running.get()) return
+        val enc: MediaCodec?
+        synchronized(encoderLock) { enc = encoder }
+        if (enc == null) return
         try {
             val params = android.os.Bundle()
             params.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
@@ -268,39 +273,45 @@ class H265Encoder(
         }
     }
 
-    /**
-     * Restart encoder with corrected FPS to match actual camera output.
-     */
+    /** Restart encoder with corrected FPS to match actual camera output. */
     fun restartWithFps(newFps: Int): Boolean {
         if (newFps == framerate) return true
         Log.d(tag, "Restarting encoder: FPS $framerate -> $newFps")
-        running.set(false)
+        synchronized(encoderLock) {
+            running.set(false)
+        }
         try { drainThread?.join(500) } catch (_: Exception) {}
-        try { encoder?.stop(); encoder?.release() } catch (_: Exception) {}
-        encoder = null
-        framerate = newFps
+        synchronized(encoderLock) {
+            try { encoder?.stop(); encoder?.release() } catch (_: Exception) {}
+            encoder = null
+            framerate = newFps
+        }
         frameProvider.clearFilledQueue()
         running.set(true)
         initEncoder(inputSurface)
-        if (encoder != null) {
-            startDrainThread()
-            return true
-        } else {
-            running.set(false)
-            return false
+        synchronized(encoderLock) {
+            if (encoder != null) {
+                startDrainThread()
+                return true
+            } else {
+                running.set(false)
+                return false
+            }
         }
     }
 
     fun release() {
         running.set(false)
         try { drainThread?.join(500) } catch (_: Exception) {}
-        try {
-            encoder?.stop()
-            encoder?.release()
-        } catch (e: Exception) {
-            Log.w(tag, "Error stopping encoder: ${e.message}")
+        synchronized(encoderLock) {
+            try {
+                encoder?.stop()
+                encoder?.release()
+            } catch (e: Exception) {
+                Log.w(tag, "Error stopping encoder: ${e.message}")
+            }
+            encoder = null
         }
-        encoder = null
         frameProvider.clear()
     }
 

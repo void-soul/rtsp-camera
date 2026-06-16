@@ -108,14 +108,24 @@ class MainEventHandlers(
             override fun onCopyRtspUrl() { uiController.copyRtspAddress() }
             override fun onNetworkSettingsChanged() { uiController.updateRtspAddress() }
             override fun onResolutionChanged() {
-                cameraManager.bindCameraUseCases()
                 if (streamManager.isStreaming()) {
-                    // 推流中切换分辨率：重启编码器产出新分辨率流
+                    // 推流中切换分辨率：先重启编码器（创建新 Surface），再重新绑定 CameraX。
+                    // 整个流程在后台线程执行，避免 MediaCodec.configure/release 阻塞主线程。
                     val newW = settingsManager.getWidth()
                     val newH = settingsManager.getHeight()
                     if (newW >= 100 && newH >= 100) {
-                        streamManager.restartEncoderForResolution(newW, newH)
+                        cameraManager.getCameraExecutor().execute {
+                            try {
+                                streamManager.restartEncoderForResolution(newW, newH)
+                                cameraManager.bindCameraUseCases()
+                            } catch (e: Exception) {
+                                Log.e("MainEventHandlers", "Failed to change resolution during streaming", e)
+                            }
+                        }
                     }
+                } else {
+                    // 未推流：直接重新绑定摄像头即可
+                    cameraManager.bindCameraUseCases()
                 }
             }
             override fun onFpsChanged(fps: Int) { streamManager.setFramerate(fps) }
