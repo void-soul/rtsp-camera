@@ -52,9 +52,35 @@ class SettingsManager {
         set { defaults.set(newValue, forKey: "previewEnabled") }
     }
     
+    var language: String {
+        get { defaults.string(forKey: "language") ?? "auto" }
+        set { defaults.set(newValue, forKey: "language") }
+    }
+
+    /// Resolve "auto" → first preferredLanguage matching zh/en → "en".
+    var resolvedLanguage: String {
+        if language != "auto" { return language }
+        let pref = Locale.preferredLanguages.first ?? "en"
+        if pref.hasPrefix("zh") { return "zh" }
+        return "en"
+    }
+
     var perfMonitorEnabled: Bool {
         get { defaults.bool(forKey: "perfMonitorEnabled") }
         set { defaults.set(newValue, forKey: "perfMonitorEnabled") }
+    }
+
+    // MARK: - Resolution Helpers
+
+    /// Device-validated resolution entries with aspect-ratio labels (matching Android).
+    /// Updated by CameraManager when the capture device changes.
+    func supportedResolutions(caps: CameraCapabilities) -> [ResolutionEntry] {
+        caps.resolvedResolutions
+    }
+
+    /// Build the display labels for the RES dropdown (e.g. "4K 16:9 (3840x2160)").
+    func resolutionDisplayLabel(for entry: ResolutionEntry) -> String {
+        "\(entry.label) (\(entry.width)x\(entry.height))"
     }
     
     func getWidth() -> Int {

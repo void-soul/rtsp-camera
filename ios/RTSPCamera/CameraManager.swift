@@ -18,6 +18,9 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     
     let captureSession = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
+
+    /// Device capabilities — refreshed each time configureSession selects a device.
+    private(set) var cameraCaps = CameraCapabilities(device: AVCaptureDevice.default(for: .video)!)
     private let audioOutput = AVCaptureAudioDataOutput()
     
     private var videoDeviceInput: AVCaptureDeviceInput?
@@ -63,6 +66,9 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
                 }
                 return
             }
+
+            // Refresh capabilities whenever the active device changes
+            self.cameraCaps = CameraCapabilities(device: videoDevice)
             
             // Configure video input (reuse if possible)
             var shouldAddVideoInput = true

@@ -38,6 +38,10 @@ struct ParamMenu: View {
     @Binding var selection: String
     var isActive: Bool = false
     var disabled: Bool = false
+    /// Maps a raw option value to its display string in the dropdown.
+    var optionLabel: ((String) -> String)?
+    /// Maps a raw value to the collapsed button label text (defaults to `displayValue`).
+    var buttonLabel: ((String) -> String)?
     var onSelect: ((String) -> Void)?
 
     var body: some View {
@@ -48,7 +52,7 @@ struct ParamMenu: View {
                     onSelect?(opt)
                 }) {
                     HStack {
-                        Text(opt)
+                        Text(optionLabel?(opt) ?? opt)
                         if opt == selection {
                             Image(systemName: "checkmark")
                         }
@@ -60,7 +64,7 @@ struct ParamMenu: View {
                 Text(title)
                     .font(.system(size: 9))
                     .foregroundColor(.white.opacity(0.6))
-                Text(displayValue)
+                Text(buttonLabel?(selection) ?? displayValue)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundColor(isActive ? Color(red: 1, green: 0.84, blue: 0) : .white)
             }
@@ -165,7 +169,24 @@ struct ContentView: View {
     @State private var previewEnabled = SettingsManager.shared.previewEnabled
     @State private var perfEnabled = SettingsManager.shared.perfMonitorEnabled
 
-    private let resolutions = ["3840x2160", "1920x1080", "1280x720"]
+    // Device-backed resolution list (matches Android: labels like "4K 16:9")
+    private var resolutionOptions: [ResolutionEntry] {
+        cameraManager.cameraCaps.resolvedResolutions
+    }
+    private var resolutionDisplayOptions: [String] {
+        let s = SettingsManager.shared
+        return resolutionOptions.map { s.resolutionDisplayLabel(for: $0) }
+    }
+
+    // Dynamic WB/filter presets based on device capabilities
+    private var availableWbPresets: [String] {
+        let all = ["AUTO", "INCANDESCENT", "FLUORESCENT", "DAYLIGHT", "CLOUDY"]
+        return all.filter { cameraManager.cameraCaps.isWbPresetSupported($0) }
+    }
+    private var availableFilters: [String] {
+        ["None", "B&W", "VIVID", "WARM", "COOL"]
+    }
+
     private let bitrates = ["5", "10", "15", "20", "25", "30", "35", "40", "50", "60"]
     private let fpsList = ["120", "60", "30", "24"]
     private let gopList = ["1", "5", "10", "15", "20", "25", "30", "40", "50", "60", "80", "100", "120"]
@@ -322,8 +343,23 @@ struct ContentView: View {
     private var topBar: some View {
         HStack(spacing: 0) {
             // Left: inline parameter labels
-            ParamMenu(title: "RES", options: resolutions, selection: $resolution,
-                      disabled: streamManager.isClientConnected) { val in
+            ParamMenu(title: "RES",
+                      options: resolutionOptions.map { $0.resolutionKey },
+                      selection: $resolution,
+                      disabled: streamManager.isClientConnected,
+                      optionLabel: { key in
+                          let s = SettingsManager.shared
+                          if let entry = resolutionOptions.first(where: { $0.resolutionKey == key }) {
+                              return s.resolutionDisplayLabel(for: entry)
+                          }
+                          return key
+                      },
+                      buttonLabel: { key in
+                          if let entry = resolutionOptions.first(where: { $0.resolutionKey == key }) {
+                              return entry.label
+                          }
+                          return key
+                      }) { val in
                 SettingsManager.shared.resolution = val
                 // Reconfigure the capture session immediately so the new resolution
                 // takes effect for the preview (and for the next streaming session),
@@ -528,7 +564,7 @@ struct ContentView: View {
                     .font(.headline)
                     .padding()
 
-                ForEach(["AUTO", "INCANDESCENT", "FLUORESCENT", "DAYLIGHT", "CLOUDY"], id: \.self) { mode in
+                ForEach(availableWbPresets, id: \.self) { mode in
                     Button(action: {
                         cameraManager.applyWhiteBalancePreset(mode)
                         showWBPopup = false
@@ -567,7 +603,7 @@ struct ContentView: View {
                     .font(.headline)
                     .padding()
 
-                ForEach(["None", "B&W", "VIVID", "WARM", "COOL"], id: \.self) { filter in
+                ForEach(availableFilters, id: \.self) { filter in
                     Button(action: {
                         cameraManager.applyFilter(filter)
                         showFilterPopup = false

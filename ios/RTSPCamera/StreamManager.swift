@@ -64,7 +64,6 @@ class StreamManager: NSObject, ObservableObject {
     private var audioSender: RTPSender?
     private let sharedStreamState = SharedStreamState()
     
-    private var displayLink: CADisplayLink?
     private var cancellables = Set<AnyCancellable>()
     
     override init() {
@@ -548,44 +547,54 @@ class StreamManager: NSObject, ObservableObject {
         stopFpsMonitor()
     }
     
-    // MARK: - FPS Monitor
+    // MARK: - Telemetry Timer
 
-    private var lastFpsCheckTime: TimeInterval = 0
-    private var frameCountSinceLastCheck = 0
-    /// 1Hz timer for the slow-changing telemetry (CPU/NET/BAT/MEM). FPS is still updated
-    /// from the CADisplayLink above, but sampling these system counters at display refresh
-    /// rate (60-120Hz) made the HUD numbers flicker wildly. Android samples these once
-    /// per second; we match that cadence here.
-    private var perfTimer: Timer?
+    /// Single unified timer at 5 Hz (every 200 ms). Previously we used a CADisplayLink
+    /// (60-120 Hz on ProMotion devices) which updated multiple @Published properties on
+    /// every display frame, causing SwiftUI to re-evaluate the full view tree at 120 Hz.
+    /// That saturated the main-thread run loop → touch events (including the Stop button)
+    /// were starved → UI appeared completely frozen during streaming.
+    ///
+    /// 5 Hz is sufficient for a readable HUD and leaves ~190 ms of headroom per cycle
+    /// for SwiftUI diffing, gesture handling, and CADisplayLink-driven animations.
+    private var telemetryTimer: Timer?
 
     private func startFpsMonitor() {
         DispatchQueue.main.async {
-            self.displayLink = CADisplayLink(target: self, selector: #selector(self.displayLinkFired))
-            self.displayLink?.add(to: .main, forMode: .common)
-            self.lastFpsCheckTime = CACurrentMediaTime()
-            // Slow telemetry: refresh once per second.
-            self.perfTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-                self?.refreshSlowTelemetry()
+            self.telemetryTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+                self?.tickTelemetry()
             }
         }
     }
 
     private func stopFpsMonitor() {
         DispatchQueue.main.async {
-            self.displayLink?.invalidate()
-            self.displayLink = nil
-            self.perfTimer?.invalidate()
-            self.perfTimer = nil
+            self.telemetryTimer?.invalidate()
+            self.telemetryTimer = nil
             self.currentFps = 0.0
         }
     }
 
-    @objc private func displayLinkFired() {
-        // High-frequency: only the encoder FPS and frame counters.
+    /// Fire every 200 ms. Update fast-changing counters every tick; sample slow system
+    /// counters at 1 Hz (every 5 ticks) to avoid expensive `host_processor_info` calls.
+    private var telemetryTick: Int = 0
+
+    private func tickTelemetry() {
+        telemetryTick += 1
+
+        // Fast: encoder FPS + frame counters (every tick)
         currentFps = videoEncoder.currentFps
         totalSentFrames = sentFramesCount
         totalDroppedFrames = Int64(videoFrameProvider.totalDroppedFrames)
         abrTargetBitrateMbps = Double(abrTargetBitrate) / 1000000.0
+
+        // Slow: system telemetry (every 5 ticks = 1 Hz)
+        if telemetryTick % 5 == 0 {
+            perfCpu = perfMonitor.getAppCpuUsage()
+            perfMem = perfMonitor.getMemoryUsage()
+            perfNet = perfMonitor.getNetworkSpeed()
+            perfBat = perfMonitor.getBatteryLevel()
+        }
 
         let settings = SettingsManager.shared
         let codecStr = settings.videoCodec.uppercased()
@@ -594,14 +603,5 @@ class StreamManager: NSObject, ObservableObject {
         let framesStr = "Frames: Sent \(totalSentFrames) / Drop \(totalDroppedFrames)"
         let systemStr = "\(perfCpu) | \(perfMem) | \(perfNet) | \(perfBat)"
         perfStatus = "\(codecStr) \(resStr) | \(framesStr) | \(abrStr) | \(systemStr)"
-    }
-
-    /// Samples the slow-changing system counters (CPU/MEM/NET/BAT) at 1Hz so the HUD
-    /// numbers stay readable instead of flickering at display-refresh rate.
-    private func refreshSlowTelemetry() {
-        perfCpu = perfMonitor.getAppCpuUsage()
-        perfMem = perfMonitor.getMemoryUsage()
-        perfNet = perfMonitor.getNetworkSpeed()
-        perfBat = perfMonitor.getBatteryLevel()
     }
 }
