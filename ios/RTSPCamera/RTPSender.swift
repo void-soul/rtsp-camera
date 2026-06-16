@@ -170,6 +170,14 @@ class RTPSender {
     /// serial queue guarantees strict FIFO ordering on the byte stream.
     static let sharedTcpWriteQueue = DispatchQueue(label: "com.gld.rtsp_camera.tcpWriteQueue", qos: .userInteractive)
 
+    /// Bounded concurrency for the shared TCP write queue.  At most this many writes
+    /// may be pending on sharedTcpWriteQueue; when the limit is hit sendRawTcp blocks
+    /// its caller (which runs on the per-sender serial queue), which blocks the sender
+    /// queue, which stops sendVideoFrame from signalling its per-frame semaphore,
+    /// which finally propagates backpressure to the FrameReader → FrameProvider chain.
+    /// This matches Android's natural backpressure from blocking OutputStream.write().
+    static let tcpWriteSlot = DispatchSemaphore(value: 6)
+
     /// Set true when the sender is stopped or its connection is known to be dead.
     /// Checked at the entry of sendVideoFrame/sendAudioFrame to drop work early instead
     /// of repeatedly sending into a cancelled connection.
@@ -307,10 +315,11 @@ class RTPSender {
         isStopped = true
         stopLock.unlock()
 
-        // Unblock any threads waiting on the backpressure semaphore (up to the slot
+        // Unblock any threads waiting on the backpressure semaphores (up to the slot
         // depth). Each unblocked thread will see isStopped==true, signal back, and
         // return — so the semaphore balance stays correct.
         for _ in 0..<3 { tcpSendSlot.signal() }
+        for _ in 0..<6 { RTPSender.tcpWriteSlot.signal() }
 
         queue.async { [weak self] in
             guard let self = self else { return }
@@ -685,15 +694,17 @@ class RTPSender {
         if count <= 3 {
             print("[RTSPCamera] RTPSender TCP send #\(count): \(data.count) bytes, connection=\(tcpConnection != nil ? "valid" : "nil")")
         }
-        // Fire-and-forget the socket write on the shared serial queue. We intentionally do
-        // NOT wait for the previous frame's send completion: doing so (an earlier backpressure
-        // semaphore) accumulated NWConnection completion latency frame-over-frame and caused
-        // ~14s end-to-end latency. Instead we let NWConnection buffer/coalesce writes the way
-        // Android's OutputStream.write()+flush() does — non-blocking from the sender's loop.
-        // sharedTcpWriteQueue is serial so video/audio interleaved headers cannot interleave.
-        // If the encoder produces frames faster than the socket drains, the bounded frame
-        // provider (capacity 5) drops the oldest frames — preferable to buffering.
+        // Limit the number of pending write work-items on the shared serial queue.
+        // When the slot is exhausted the senderʼs own serial queue blocks here,
+        // which cascades backpressure up to the FrameReader → FrameProvider chain.
+        // Signal happens inside the async block — after the write is dispatched to
+        // NWConnection, not after the TCP ACK — so we cap pipeline depth without
+        // accumulating the per-frame latency that a contentProcessed callback would.
+        RTPSender.tcpWriteSlot.wait()
+        if isStoppedFlag() { RTPSender.tcpWriteSlot.signal(); return }
+
         RTPSender.sharedTcpWriteQueue.async { [weak self] in
+            defer { RTPSender.tcpWriteSlot.signal() }
             guard let self = self, !self.isStoppedFlag() else { return }
             self.tcpConnection?.send(content: data, completion: .contentProcessed({ [weak self] error in
                 if let error = error {
