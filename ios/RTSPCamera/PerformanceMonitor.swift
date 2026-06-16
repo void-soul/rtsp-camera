@@ -42,7 +42,7 @@ class PerformanceMonitor {
         if lastTime == 0 {
             lastTxBytes = txBytes
             lastTime = now
-            return "NET: 0.0 KB/s"
+            return "0.0 KB/s"
         }
 
         let timeDiff = now - lastTime
@@ -51,13 +51,13 @@ class PerformanceMonitor {
         lastTxBytes = txBytes
         lastTime = now
 
-        guard timeDiff > 0, byteDiff > 0 else { return "NET: 0.0 KB/s" }
+        guard timeDiff > 0, byteDiff > 0 else { return "0.0 KB/s" }
 
         let speedBytesPerSec = Double(byteDiff) / timeDiff
         if speedBytesPerSec >= 1024 * 1024 {
-            return String(format: "NET: %.2f MB/s", speedBytesPerSec / (1024 * 1024))
+            return String(format: "%.2f MB/s", speedBytesPerSec / (1024 * 1024))
         } else {
-            return String(format: "NET: %.1f KB/s", speedBytesPerSec / 1024)
+            return String(format: "%.1f KB/s", speedBytesPerSec / 1024)
         }
     }
 
@@ -100,9 +100,9 @@ class PerformanceMonitor {
                 }
             }
         }
-        guard result == KERN_SUCCESS else { return "MEM: N/A" }
+        guard result == KERN_SUCCESS else { return "N/A" }
         let rssMb = Double(info.resident_size) / (1024 * 1024)
-        return String(format: "MEM: %.1f MB", rssMb)
+        return String(format: "%.1f MB", rssMb)
     }
 
     // MARK: - CPU Usage
@@ -117,7 +117,7 @@ class PerformanceMonitor {
         if lastCpuTimestamp == 0 {
             lastCpuTime = cpuTime
             lastCpuTimestamp = now
-            return "CPU: 0.0%"
+            return "0.0%"
         }
 
         let timeDiff = now - lastCpuTimestamp
@@ -126,12 +126,12 @@ class PerformanceMonitor {
         lastCpuTime = cpuTime
         lastCpuTimestamp = now
 
-        guard timeDiff > 0 else { return "CPU: 0.0%" }
+        guard timeDiff > 0 else { return "0.0%" }
 
         let numCores = Double(ProcessInfo.processInfo.activeProcessorCount)
         let cpuPercent = (Double(cpuDiff) / 1_000_000_000.0) / (timeDiff * numCores) * 100.0
         let clamped = min(max(cpuPercent, 0), 100)
-        return String(format: "CPU: %.1f%%", clamped)
+        return String(format: "%.1f%%", clamped)
     }
 
     private func getProcessCpuTimeNs() -> UInt64 {
@@ -170,8 +170,8 @@ class PerformanceMonitor {
     func getBatteryLevel() -> String {
         UIDevice.current.isBatteryMonitoringEnabled = true
         let level = UIDevice.current.batteryLevel
-        if level < 0 { return "BAT: N/A" }
-        return String(format: "BAT: %d%%", Int(level * 100))
+        if level < 0 { return "N/A" }
+        return String(format: "%d%%", Int(level * 100))
     }
 
     // MARK: - Combined Status

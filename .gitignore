@@ -12,3 +12,4 @@ android/app/build
 /pubspec.lock
 /rtsp_camera.iml
 /android/build/reports/problems
+keys/
