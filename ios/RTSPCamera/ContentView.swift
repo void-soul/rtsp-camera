@@ -780,6 +780,11 @@ struct ContentView: View {
                 .font(.system(size: 9, weight: .bold))
                 .foregroundColor(Color(red: 1.0, green: 0.84, blue: 0.0)) // Gold
                 .tracking(1.0)
+
+            // Build version
+            Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")(\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"))")
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundColor(.white.opacity(0.4))
             
             // Section 1: System Resources
             VStack(alignment: .leading, spacing: 3) {
@@ -844,7 +849,7 @@ struct ContentView: View {
         )
         .padding(.top, 40)
         .padding(.leading, 8)
-        .frame(maxWidth: 180, alignment: .topLeading)
+        .frame(maxWidth: 200, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
