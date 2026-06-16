@@ -782,7 +782,7 @@ struct ContentView: View {
                 .tracking(1.0)
 
             // Build version
-            Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")(\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"))")
+            Text("V\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")（\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?")）")
                 .font(.system(size: 8, design: .monospaced))
                 .foregroundColor(.white.opacity(0.4))
             
