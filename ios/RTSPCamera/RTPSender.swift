@@ -189,6 +189,15 @@ class RTPSender {
     private var debugFrameCount = 0
     private var debugByteCount = 0
 
+    /// Bounded backpressure: at most N frames may be queued on the sender's serial
+    /// queue at once.  When the semaphore hits zero, sendVideoFrame blocks its caller
+    /// (the FrameReader), which in turn lets the bounded FrameProvider fill up and
+    /// drop frames at the source — the same natural backpressure chain Android gets
+    /// from blocking OutputStream.write().  A value of 1 serialises and adds latency
+    /// (the original ~14 s bug); a value of ~3 pipelines just enough to keep the wire
+    /// busy without multi-second buffering inside NWConnection.
+    private let tcpSendSlot = DispatchSemaphore(value: 3)
+
     // Config params
     private let isH265: Bool
     private let clockRate: UInt32
@@ -297,6 +306,12 @@ class RTPSender {
         stopLock.lock()
         isStopped = true
         stopLock.unlock()
+
+        // Unblock any threads waiting on the backpressure semaphore (up to the slot
+        // depth). Each unblocked thread will see isStopped==true, signal back, and
+        // return — so the semaphore balance stays correct.
+        for _ in 0..<3 { tcpSendSlot.signal() }
+
         queue.async { [weak self] in
             guard let self = self else { return }
             self.rtcpSender?.stop()
@@ -328,9 +343,14 @@ class RTPSender {
     func sendVideoFrame(data: Data, timestampUs: Int64, isKeyFrame: Bool) {
         // Drop work early if this sender has been stopped (client disconnect / teardown).
         if isStoppedFlag() { return }
+
+        // Backpressure: wait for a slot in the bounded pipeline.
+        tcpSendSlot.wait()
+        if isStoppedFlag() { tcpSendSlot.signal(); return }
+
         queue.async { [weak self] in
             guard let self = self else { return }
-            if self.isStoppedFlag() { return }
+            if self.isStoppedFlag() { self.tcpSendSlot.signal(); return }
 
             self.isBatching = true
             self.tcpBatchData.removeAll(keepingCapacity: true)
@@ -400,15 +420,21 @@ class RTPSender {
             if !self.isTcp && packetCount > 10 {
                 usleep(500)
             }
+
+            self.tcpSendSlot.signal()
         }
     }
     
     func sendAudioFrame(data: Data, timestampUs: Int64) {
         // Drop work early if this sender has been stopped (client disconnect / teardown).
         if isStoppedFlag() { return }
+
+        tcpSendSlot.wait()
+        if isStoppedFlag() { tcpSendSlot.signal(); return }
+
         queue.async { [weak self] in
             guard let self = self else { return }
-            if self.isStoppedFlag() { return }
+            if self.isStoppedFlag() { self.tcpSendSlot.signal(); return }
 
             // Maintain timestamp
             let startPts = self.sharedState.getOrSetStartPts(timestampUs)
@@ -442,6 +468,8 @@ class RTPSender {
             
             self.sendPacket(data: rtpBuffer)
             self.rtcpSender?.updateRtpTimestamp(self.timestamp)
+
+            self.tcpSendSlot.signal()
         }
     }
     
