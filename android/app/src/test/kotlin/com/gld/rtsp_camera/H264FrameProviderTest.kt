@@ -18,14 +18,15 @@ class H264FrameProviderTest {
     @Test
     fun `prepare allocates pool`() {
         provider.prepare()
-        // Pool size is 10, we should be able to obtain 10 frames
+        // Pool size is queueCapacity + 10, we should be able to obtain this many frames
+        val expectedSize = provider.getQueueCapacity() + 10
         val frames = mutableListOf<NativeFrame>()
-        for (i in 0 until 10) {
+        for (i in 0 until expectedSize) {
             val frame = provider.obtainEmptyFrame()
             assertNotNull("Frame $i should not be null", frame)
             frames.add(frame!!)
         }
-        // 11th should be null (pool exhausted)
+        // Next one should be null (pool exhausted)
         assertNull(provider.obtainEmptyFrame())
     }
 
@@ -33,8 +34,9 @@ class H264FrameProviderTest {
     fun `prepare is idempotent`() {
         provider.prepare()
         provider.prepare() // second call should be no-op
-        // Still only 10 frames available
-        for (i in 0 until 10) {
+        // Still only queueCapacity + 10 frames available
+        val expectedSize = provider.getQueueCapacity() + 10
+        for (i in 0 until expectedSize) {
             assertNotNull(provider.obtainEmptyFrame())
         }
         assertNull(provider.obtainEmptyFrame())

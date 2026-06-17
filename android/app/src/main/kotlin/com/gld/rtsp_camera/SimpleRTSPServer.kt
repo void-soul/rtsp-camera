@@ -96,9 +96,20 @@ class SimpleRTSPServer(
         if (!running.get()) return
         running.set(false)
         try { serverSocket?.close() } catch (e: Exception) {}
-        clients.values.forEach { it.close() }
-        clients.clear()
+        disconnectAllClients()
         Log.d(tag, "RTSP server stopped")
+    }
+
+    /**
+     * 断开所有当前连接的客户端，强制其重新连接。
+     */
+    fun disconnectAllClients() {
+        Log.d(tag, "Disconnecting all active RTSP clients")
+        val activeSessions = ArrayList(clients.values)
+        for (session in activeSessions) {
+            session.close()
+        }
+        clients.clear()
     }
 
     /**
@@ -129,6 +140,7 @@ class SimpleRTSPServer(
         private var clientAudioPort = 0
         private var isPlaying = false
         private var rtspSessionId = generateSessionId()
+        private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
 
         // 在 SETUP 时预创建 RTP/RTCP Socket，以便在 Transport 头中报告正确的 server_port
         private var videoRtpSocket: DatagramSocket? = null
@@ -341,6 +353,7 @@ class SimpleRTSPServer(
         }
 
         fun close() {
+            if (!closed.compareAndSet(false, true)) return
             try {
                 if (!socket.isClosed) socket.close()
             } catch (e: Exception) {}

@@ -607,7 +607,8 @@ class UiController(
         tvLanguage.isEnabled = !isStreaming
         tvCodec.alpha = if (isStreaming) disabledAlpha else 1f
         tvCodec.isEnabled = !isStreaming
-        tvResolution.alpha = 1f
+        tvResolution.alpha = if (isStreaming) disabledAlpha else 1f
+        tvResolution.isEnabled = !isStreaming
         tvBitrate.alpha = 1f
         tvFps.alpha = 1f
         tvGop.alpha = 1f
@@ -732,7 +733,7 @@ class UiController(
     fun updateFab(streaming: Boolean) {
         fabAction.setImageResource(if (streaming) android.R.drawable.ic_menu_close_clear_cancel else android.R.drawable.ic_media_play)
         btnSettings.isEnabled = !streaming; btnFlip.isEnabled = !streaming
-        tvResolution.isEnabled = true; tvBitrate.isEnabled = true; tvFps.isEnabled = true; tvGop.isEnabled = true
+        tvResolution.isEnabled = !streaming; tvBitrate.isEnabled = true; tvFps.isEnabled = true; tvGop.isEnabled = true
         updateTogglesUI()
     }
 
