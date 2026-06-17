@@ -13,3 +13,5 @@ android/app/build
 /rtsp_camera.iml
 /android/build/reports/problems
 keys/
+keystore_base64.txt
+1.txt
