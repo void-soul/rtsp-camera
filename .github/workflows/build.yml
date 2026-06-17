@@ -73,6 +73,19 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      - name: Validate secrets
+        env:
+          B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PWD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PWD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$B64" ]; then echo "::error::ANDROID_KEYSTORE_BASE64 secret is missing or empty!"; exit 1; fi
+          if [ -z "$PWD" ]; then echo "::error::ANDROID_STORE_PASSWORD secret is missing or empty!"; exit 1; fi
+          if [ -z "$ALIAS" ]; then echo "::error::ANDROID_KEY_ALIAS secret is missing or empty!"; exit 1; fi
+          if [ -z "$KEY_PWD" ]; then echo "::error::ANDROID_KEY_PASSWORD secret is missing or empty!"; exit 1; fi
+          echo "All required signing secrets are present."
+
       - name: Decode Keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
